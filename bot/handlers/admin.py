@@ -8,10 +8,10 @@ from django.db.models import Count, Sum, Max
 
 from apps.users.models import User, Admin
 from apps.movies.models import Movie, Category
-from apps.payments.models import Payment
+from apps.payments.models import Payment, Tariff
 from apps.core.models import Broadcast
 from bot.filters import IsAdmin, CanAddMovies, CanBroadcast, CanManageUsers, CanManagePayments, IsSuperAdmin
-from bot.states import AddMovieState, BroadcastState, AddChannelState, EditSettingsState, EditMessageState, UserSearchState, AddCategoryState, EditCategoryState
+from bot.states import AddMovieState, BroadcastState, AddChannelState, EditSettingsState, EditMessageState, UserSearchState, AddCategoryState, EditCategoryState, AddTariffState, EditTariffState
 from bot.keyboards import (
     admin_categories_kb, movie_quality_kb, movie_language_kb, movie_country_kb,
     broadcast_target_kb, broadcast_ad_kb, confirm_broadcast_kb,
@@ -2531,6 +2531,411 @@ async def edit_discount_duration_save(message: Message, state: FSMContext):
         f"Yangi muddat: <code>{minutes}</code> daqiqa",
         reply_markup=kb
     )
+
+
+# ==================== TARIFLAR ====================
+
+@sync_to_async
+def get_all_tariffs():
+    """Barcha tariflarni olish"""
+    return list(Tariff.objects.all().order_by('order', 'days'))
+
+
+@sync_to_async
+def get_tariff_by_id(tariff_id: int):
+    """Tarifni ID bo'yicha olish"""
+    try:
+        return Tariff.objects.get(id=tariff_id)
+    except Tariff.DoesNotExist:
+        return None
+
+
+@sync_to_async
+def create_tariff(name: str, days: int, price: int):
+    """Yangi tarif yaratish"""
+    order = Tariff.objects.count()
+    return Tariff.objects.create(name=name, days=days, price=price, order=order)
+
+
+@sync_to_async
+def update_tariff(tariff_id: int, **kwargs):
+    """Tarifni yangilash"""
+    Tariff.objects.filter(id=tariff_id).update(**kwargs)
+
+
+@sync_to_async
+def delete_tariff(tariff_id: int):
+    """Tarifni o'chirish"""
+    Tariff.objects.filter(id=tariff_id).delete()
+
+
+@sync_to_async
+def toggle_tariff_status(tariff_id: int):
+    """Tarif holatini o'zgartirish"""
+    tariff = Tariff.objects.get(id=tariff_id)
+    tariff.is_active = not tariff.is_active
+    tariff.save()
+    return tariff.is_active
+
+
+@router.callback_query(F.data == "admin:tariffs", IsSuperAdmin())
+async def tariffs_menu_callback(callback: CallbackQuery, state: FSMContext):
+    """Tariflar menyusi"""
+    await state.clear()
+    tariffs = await get_all_tariffs()
+
+    if not tariffs:
+        text = (
+            "💎 <b>Tariflar</b>\n\n"
+            "📭 Hozircha tariflar mavjud emas.\n\n"
+            "Yangi tarif qo'shish uchun tugmani bosing."
+        )
+    else:
+        text = "💎 <b>Tariflar</b>\n\n"
+        for i, tariff in enumerate(tariffs, 1):
+            status = "✅" if tariff.is_active else "❌"
+            text += f"{i}. {status} <b>{tariff.name}</b> - {tariff.days} kun - {tariff.price:,} so'm\n"
+        text += "\nTarifni tanlang yoki yangi qo'shing:"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[])
+
+    # Mavjud tariflar
+    for tariff in tariffs:
+        status = "✅" if tariff.is_active else "❌"
+        kb.inline_keyboard.append([
+            InlineKeyboardButton(text=f"{status} {tariff.name}", callback_data=f"tariff:view:{tariff.id}")
+        ])
+
+    # Tugmalar
+    kb.inline_keyboard.append([
+        InlineKeyboardButton(text="➕ Yangi tarif", callback_data="tariff:add")
+    ])
+    kb.inline_keyboard.append([
+        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin:panel")
+    ])
+
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tariff:view:"), IsSuperAdmin())
+async def tariff_view_callback(callback: CallbackQuery):
+    """Tarifni ko'rish"""
+    tariff_id = int(callback.data.split(":")[2])
+    tariff = await get_tariff_by_id(tariff_id)
+
+    if not tariff:
+        await callback.answer("❌ Tarif topilmadi!", show_alert=True)
+        return
+
+    status = "✅ Aktiv" if tariff.is_active else "❌ Deaktiv"
+    text = (
+        f"💎 <b>{tariff.name}</b>\n\n"
+        f"📅 Muddat: {tariff.days} kun\n"
+        f"💰 Narx: {tariff.price:,} so'm\n"
+        f"📊 Holat: {status}\n"
+        f"📋 Tartib: {tariff.order}"
+    )
+
+    toggle_text = "❌ Deaktiv qilish" if tariff.is_active else "✅ Aktiv qilish"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=toggle_text, callback_data=f"tariff:toggle:{tariff.id}")],
+        [InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"tariff:edit:{tariff.id}"),
+         InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"tariff:delete:{tariff.id}")],
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin:tariffs")]
+    ])
+
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tariff:toggle:"), IsSuperAdmin())
+async def tariff_toggle_callback(callback: CallbackQuery):
+    """Tarif holatini o'zgartirish"""
+    tariff_id = int(callback.data.split(":")[2])
+    new_status = await toggle_tariff_status(tariff_id)
+
+    status_text = "aktivlashtirildi ✅" if new_status else "deaktiv qilindi ❌"
+    await callback.answer(f"Tarif {status_text}", show_alert=True)
+
+    # Qayta ko'rsatish
+    await tariff_view_callback(callback)
+
+
+@router.callback_query(F.data.startswith("tariff:delete:"), IsSuperAdmin())
+async def tariff_delete_callback(callback: CallbackQuery):
+    """Tarifni o'chirish"""
+    tariff_id = int(callback.data.split(":")[2])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Ha, o'chirish", callback_data=f"tariff:confirm_delete:{tariff_id}"),
+         InlineKeyboardButton(text="❌ Yo'q", callback_data=f"tariff:view:{tariff_id}")]
+    ])
+
+    await callback.message.edit_text(
+        "⚠️ <b>Tarifni o'chirishni tasdiqlaysizmi?</b>\n\n"
+        "Bu amalni qaytarib bo'lmaydi!",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tariff:confirm_delete:"), IsSuperAdmin())
+async def tariff_confirm_delete_callback(callback: CallbackQuery):
+    """Tarifni o'chirishni tasdiqlash"""
+    tariff_id = int(callback.data.split(":")[2])
+    await delete_tariff(tariff_id)
+    await callback.answer("✅ Tarif o'chirildi!", show_alert=True)
+
+    # Tariflar ro'yxatiga qaytish
+    await tariffs_menu_callback(callback, None)
+
+
+@router.callback_query(F.data == "tariff:add", IsSuperAdmin())
+async def tariff_add_callback(callback: CallbackQuery, state: FSMContext):
+    """Yangi tarif qo'shish"""
+    await state.set_state(AddTariffState.name)
+    await callback.message.edit_text(
+        "💎 <b>Yangi tarif qo'shish</b>\n\n"
+        "📝 Tarif nomini kiriting:\n"
+        "Masalan: <code>7 kun</code> yoki <code>1 oy</code>",
+        reply_markup=cancel_inline_kb()
+    )
+    await callback.answer()
+
+
+@router.message(AddTariffState.name, F.text)
+async def tariff_add_name(message: Message, state: FSMContext):
+    """Tarif nomi"""
+    name = message.text.strip()
+
+    if len(name) < 2 or len(name) > 50:
+        await message.answer(
+            "❌ Nom 2-50 belgidan iborat bo'lishi kerak!",
+            reply_markup=cancel_inline_kb()
+        )
+        return
+
+    await state.update_data(name=name)
+    await state.set_state(AddTariffState.days)
+
+    await message.answer(
+        f"✅ Nom: <b>{name}</b>\n\n"
+        "📅 Kunlar sonini kiriting:\n"
+        "Masalan: <code>7</code> yoki <code>30</code>",
+        reply_markup=cancel_inline_kb()
+    )
+
+
+@router.message(AddTariffState.days, F.text)
+async def tariff_add_days(message: Message, state: FSMContext):
+    """Tarif kunlari"""
+    try:
+        days = int(message.text.strip())
+        if days < 1 or days > 365:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "❌ 1 dan 365 gacha son kiriting!",
+            reply_markup=cancel_inline_kb()
+        )
+        return
+
+    await state.update_data(days=days)
+    await state.set_state(AddTariffState.price)
+
+    data = await state.get_data()
+    await message.answer(
+        f"✅ Nom: <b>{data['name']}</b>\n"
+        f"✅ Kunlar: <b>{days}</b>\n\n"
+        "💰 Narxni kiriting (so'mda):\n"
+        "Masalan: <code>25000</code>",
+        reply_markup=cancel_inline_kb()
+    )
+
+
+@router.message(AddTariffState.price, F.text)
+async def tariff_add_price(message: Message, state: FSMContext):
+    """Tarif narxi"""
+    try:
+        price = int(message.text.strip().replace(" ", "").replace(",", ""))
+        if price < 1000:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "❌ Kamida 1000 so'm kiriting!",
+            reply_markup=cancel_inline_kb()
+        )
+        return
+
+    data = await state.get_data()
+    name = data['name']
+    days = data['days']
+
+    # Tarifni yaratish
+    tariff = await create_tariff(name=name, days=days, price=price)
+
+    await state.clear()
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Yana qo'shish", callback_data="tariff:add")],
+        [InlineKeyboardButton(text="💎 Tariflar", callback_data="admin:tariffs")],
+        [InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin:panel")]
+    ])
+
+    await message.answer(
+        f"✅ <b>Tarif yaratildi!</b>\n\n"
+        f"📝 Nom: {name}\n"
+        f"📅 Muddat: {days} kun\n"
+        f"💰 Narx: {price:,} so'm",
+        reply_markup=kb
+    )
+
+
+@router.callback_query(F.data.startswith("tariff:edit:"), IsSuperAdmin())
+async def tariff_edit_callback(callback: CallbackQuery, state: FSMContext):
+    """Tarifni tahrirlash"""
+    tariff_id = int(callback.data.split(":")[2])
+    tariff = await get_tariff_by_id(tariff_id)
+
+    if not tariff:
+        await callback.answer("❌ Tarif topilmadi!", show_alert=True)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Nomni o'zgartirish", callback_data=f"tariff:edit_name:{tariff.id}")],
+        [InlineKeyboardButton(text="📅 Kunlarni o'zgartirish", callback_data=f"tariff:edit_days:{tariff.id}")],
+        [InlineKeyboardButton(text="💰 Narxni o'zgartirish", callback_data=f"tariff:edit_price:{tariff.id}")],
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"tariff:view:{tariff.id}")]
+    ])
+
+    await callback.message.edit_text(
+        f"✏️ <b>{tariff.name} tarifini tahrirlash</b>\n\n"
+        f"📅 Muddat: {tariff.days} kun\n"
+        f"💰 Narx: {tariff.price:,} so'm\n\n"
+        "Nimani o'zgartirmoqchisiz?",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tariff:edit_name:"), IsSuperAdmin())
+async def tariff_edit_name_start(callback: CallbackQuery, state: FSMContext):
+    """Tarif nomini tahrirlash - boshlash"""
+    tariff_id = int(callback.data.split(":")[2])
+    await state.update_data(tariff_id=tariff_id)
+    await state.set_state(EditTariffState.name)
+
+    await callback.message.edit_text(
+        "📝 <b>Yangi nomni kiriting:</b>",
+        reply_markup=cancel_inline_kb()
+    )
+    await callback.answer()
+
+
+@router.message(EditTariffState.name, F.text)
+async def tariff_edit_name_save(message: Message, state: FSMContext):
+    """Tarif nomini saqlash"""
+    name = message.text.strip()
+
+    if len(name) < 2 or len(name) > 50:
+        await message.answer(
+            "❌ Nom 2-50 belgidan iborat bo'lishi kerak!",
+            reply_markup=cancel_inline_kb()
+        )
+        return
+
+    data = await state.get_data()
+    tariff_id = data['tariff_id']
+    await update_tariff(tariff_id, name=name)
+    await state.clear()
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 Tariflar", callback_data="admin:tariffs")]
+    ])
+
+    await message.answer(f"✅ Tarif nomi yangilandi: <b>{name}</b>", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("tariff:edit_days:"), IsSuperAdmin())
+async def tariff_edit_days_start(callback: CallbackQuery, state: FSMContext):
+    """Tarif kunlarini tahrirlash - boshlash"""
+    tariff_id = int(callback.data.split(":")[2])
+    await state.update_data(tariff_id=tariff_id)
+    await state.set_state(EditTariffState.days)
+
+    await callback.message.edit_text(
+        "📅 <b>Yangi kunlar sonini kiriting:</b>",
+        reply_markup=cancel_inline_kb()
+    )
+    await callback.answer()
+
+
+@router.message(EditTariffState.days, F.text)
+async def tariff_edit_days_save(message: Message, state: FSMContext):
+    """Tarif kunlarini saqlash"""
+    try:
+        days = int(message.text.strip())
+        if days < 1 or days > 365:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "❌ 1 dan 365 gacha son kiriting!",
+            reply_markup=cancel_inline_kb()
+        )
+        return
+
+    data = await state.get_data()
+    tariff_id = data['tariff_id']
+    await update_tariff(tariff_id, days=days)
+    await state.clear()
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 Tariflar", callback_data="admin:tariffs")]
+    ])
+
+    await message.answer(f"✅ Muddat yangilandi: <b>{days} kun</b>", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("tariff:edit_price:"), IsSuperAdmin())
+async def tariff_edit_price_start(callback: CallbackQuery, state: FSMContext):
+    """Tarif narxini tahrirlash - boshlash"""
+    tariff_id = int(callback.data.split(":")[2])
+    await state.update_data(tariff_id=tariff_id)
+    await state.set_state(EditTariffState.price)
+
+    await callback.message.edit_text(
+        "💰 <b>Yangi narxni kiriting (so'mda):</b>",
+        reply_markup=cancel_inline_kb()
+    )
+    await callback.answer()
+
+
+@router.message(EditTariffState.price, F.text)
+async def tariff_edit_price_save(message: Message, state: FSMContext):
+    """Tarif narxini saqlash"""
+    try:
+        price = int(message.text.strip().replace(" ", "").replace(",", ""))
+        if price < 1000:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "❌ Kamida 1000 so'm kiriting!",
+            reply_markup=cancel_inline_kb()
+        )
+        return
+
+    data = await state.get_data()
+    tariff_id = data['tariff_id']
+    await update_tariff(tariff_id, price=price)
+    await state.clear()
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 Tariflar", callback_data="admin:tariffs")]
+    ])
+
+    await message.answer(f"✅ Narx yangilandi: <b>{price:,} so'm</b>", reply_markup=kb)
 
 
 # ==================== CHIQISH ====================

@@ -8,13 +8,10 @@ def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
 
     builder.row(InlineKeyboardButton(text="🔍 Kino qidirish", callback_data="search"))
     builder.row(
-        InlineKeyboardButton(text="💎 Premium filmlar", callback_data="premium_movies"),
-        InlineKeyboardButton(text="❤️ Saqlanganlar", callback_data="saved_movies")
-    )
-    builder.row(
-        InlineKeyboardButton(text="👤 Profil", callback_data="profile"),
+        InlineKeyboardButton(text="❤️ Saqlanganlar", callback_data="saved_movies"),
         InlineKeyboardButton(text="💎 Premium", callback_data="premium")
     )
+    builder.row(InlineKeyboardButton(text="👤 Profil", callback_data="profile"))
 
     # Admin tugmasi
     if is_admin:
@@ -460,9 +457,10 @@ def admin_main_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="💳 To'lovlar", callback_data="admin:payments")
     )
     builder.row(
-        InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="admin:settings"),
-        InlineKeyboardButton(text="📨 Xabar yuborish", callback_data="admin:broadcast")
+        InlineKeyboardButton(text="💎 Tariflar", callback_data="admin:tariffs"),
+        InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="admin:settings")
     )
+    builder.row(InlineKeyboardButton(text="📨 Xabar yuborish", callback_data="admin:broadcast"))
     builder.row(InlineKeyboardButton(text="✏️ Xabarlar", callback_data="admin:messages"))
     builder.row(InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_menu"))
     return builder.as_markup()

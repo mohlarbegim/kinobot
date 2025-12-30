@@ -66,3 +66,17 @@ class EditCategoryState(StatesGroup):
     """Janrni tahrirlash holatlari"""
     name = State()
     emoji = State()
+
+
+class AddTariffState(StatesGroup):
+    """Tarif qo'shish holatlari"""
+    name = State()
+    days = State()
+    price = State()
+
+
+class EditTariffState(StatesGroup):
+    """Tarifni tahrirlash holatlari"""
+    name = State()
+    days = State()
+    price = State()
