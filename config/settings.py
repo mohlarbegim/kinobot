@@ -24,18 +24,32 @@ if not SECRET_KEY:
 
 DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-# Security: Don't allow all hosts in production
-_allowed_hosts = os.getenv('ALLOWED_HOSTS', '')
-if _allowed_hosts:
-    ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts.split(',') if h.strip()]
-else:
-    if DEBUG:
-        ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]']
-    else:
-        ALLOWED_HOSTS = ['.railway.app']  # Railway default
+# Security: Don't allow all hosts in production.
+# Loopback doim ruxsat etiladi - start.py ichki /health/ tekshiruvi 127.0.0.1 ga uradi;
+# DEBUG=False bo'lganda ALLOWED_HOSTS ichida bo'lmasa Django 400 (host rad etildi) beradi
+# va healthcheck hech qachon 200 olmaydi.
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]']
 
-# Railway specific
+# Foydalanuvchi bergan qo'shimcha hostlar (vergul bilan)
+ALLOWED_HOSTS += [h.strip() for h in os.getenv('ALLOWED_HOSTS', '').split(',') if h.strip()]
+
+# Railway domenlari: umumiy *.railway.app + aniq public/private domenlar
+if '.railway.app' not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append('.railway.app')
+for _rw_var in ('RAILWAY_PUBLIC_DOMAIN', 'RAILWAY_PRIVATE_DOMAIN'):
+    _rw_host = os.getenv(_rw_var, '').strip()
+    if _rw_host and _rw_host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_rw_host)
+
+# Railway specific: CSRF trusted origins (admin panelga HTTPS orqali kirish uchun)
 CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if o.strip()]
+if 'https://*.railway.app' not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append('https://*.railway.app')
+_rw_public = os.getenv('RAILWAY_PUBLIC_DOMAIN', '').strip()
+if _rw_public:
+    _rw_origin = f'https://{_rw_public}'
+    if _rw_origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(_rw_origin)
 
 INSTALLED_APPS = [
     'django.contrib.admin',
