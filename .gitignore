@@ -45,6 +45,13 @@ coverage.xml
 # Claude
 .claude/
 
+# Node / React frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+# React build artifacts (Docker build paytida yaratiladi)
+static/dashboard/
+
 # Temporary files
 *.txt.txt
 ruyhat.txt

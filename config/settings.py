@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+from datetime import timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 import dj_database_url
@@ -59,16 +60,23 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
+    # Third-party
+    'rest_framework',
+    'django_filters',
+    'corsheaders',
+
     # Local apps
     'apps.users',
     'apps.movies',
     'apps.channels',
     'apps.payments',
     'apps.core',
+    'apps.api',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -211,3 +219,38 @@ ADMINS = _parse_admin_ids(os.getenv('ADMINS', ''))
 # Payment settings
 DEFAULT_CARD_NUMBER = os.getenv('DEFAULT_CARD_NUMBER', '8600 0000 0000 0000')
 DEFAULT_CARD_HOLDER = os.getenv('DEFAULT_CARD_HOLDER', 'CARD HOLDER')
+
+# ---------------------------------------------------------------------------
+# REST API (React admin dashboard)
+# ---------------------------------------------------------------------------
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    # Barcha endpointlar default holatda faqat is_staff foydalanuvchilar uchun.
+    # Login endpointi AllowAny bilan alohida ochiladi.
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAdminUser',
+    ),
+    'DEFAULT_FILTER_BACKENDS': (
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ),
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 25,
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'UPDATE_LAST_LOGIN': True,
+}
+
+# CORS: prod'da React Django bilan bir domendan beriladi (CORS shart emas).
+# Faqat lokal dev (Vite :5173 -> Django :8000) uchun ochamiz.
+CORS_ALLOWED_ORIGINS = [o.strip() for o in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()]
+if DEBUG:
+    CORS_ALLOWED_ORIGINS += ['http://localhost:5173', 'http://127.0.0.1:5173']
+CORS_ALLOW_CREDENTIALS = True

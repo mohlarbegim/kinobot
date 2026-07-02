@@ -1,0 +1,43 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+ENV/
+
+# Django local
+db.sqlite3
+db.sqlite3-journal
+staticfiles/
+media/
+*.log
+
+# Node (Docker frontend stage npm ci qiladi - lokal node_modules kerak emas)
+node_modules/
+frontend/node_modules/
+frontend/dist/
+static/dashboard/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+
+# Coverage / temp
+htmlcov/
+.coverage*
+coverage.xml
