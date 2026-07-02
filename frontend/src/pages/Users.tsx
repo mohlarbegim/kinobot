@@ -97,7 +97,9 @@ export default function Users() {
         <Typography.Title level={3} style={{ margin: 0 }}>Foydalanuvchilar</Typography.Title>
         <Input.Search allowClear placeholder="ID, username, ism..." style={{ width: 260 }} onSearch={(v) => { setSearch(v); setPage(1) }} />
       </div>
-      <Segmented options={PRESETS} value={preset} onChange={(v) => { setPreset(v as string); setPage(1) }} style={{ marginBottom: 16 }} />
+      <div style={{ overflowX: 'auto', marginBottom: 16, paddingBottom: 4 }}>
+        <Segmented options={PRESETS} value={preset} onChange={(v) => { setPreset(v as string); setPage(1) }} />
+      </div>
       <Table
         rowKey="id"
         loading={isLoading}

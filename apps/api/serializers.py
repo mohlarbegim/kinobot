@@ -220,3 +220,15 @@ class BroadcastSerializer(serializers.ModelSerializer):
             'id', 'total_users', 'sent_count', 'failed_count',
             'is_completed', 'sent_by', 'started_at', 'completed_at',
         ]
+
+    def validate(self, attrs):
+        ctype = attrs.get('content_type', 'text')
+        if ctype == 'text':
+            if not (attrs.get('text') or '').strip():
+                raise serializers.ValidationError({'text': 'Matn kiritilishi shart'})
+        else:
+            if not (attrs.get('file_id') or '').strip():
+                raise serializers.ValidationError(
+                    {'file_id': f"{ctype} turi uchun Telegram file_id kiritilishi shart"}
+                )
+        return attrs

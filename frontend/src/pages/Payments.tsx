@@ -68,7 +68,9 @@ export default function Payments() {
   return (
     <div>
       <Typography.Title level={3}>To'lovlar</Typography.Title>
-      <Segmented options={STATUS} value={statusF} onChange={(v) => { setStatusF(v as string); setPage(1) }} style={{ marginBottom: 16 }} />
+      <div style={{ overflowX: 'auto', marginBottom: 16, paddingBottom: 4 }}>
+        <Segmented options={STATUS} value={statusF} onChange={(v) => { setStatusF(v as string); setPage(1) }} />
+      </div>
       <Table
         rowKey="id"
         loading={isLoading}

@@ -347,13 +347,30 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
 
 
 # ---------------------------------------------------------------------------
-# Broadcasts - tarix (read-only). Yuborish Telegram bot admin panelidan qilinadi.
+# Broadcasts - tarix + yuborish. Yaratilganda Redis orqali bot jarayoniga signal
+# beriladi (bot/utils/cache_listener.py -> broadcast_sender.send_broadcast).
 # ---------------------------------------------------------------------------
-class BroadcastViewSet(viewsets.ReadOnlyModelViewSet):
+class BroadcastViewSet(viewsets.ModelViewSet):
     queryset = Broadcast.objects.all().select_related('sent_by')
     serializer_class = BroadcastSerializer
+    http_method_names = ['get', 'head', 'options', 'post']  # list/retrieve/create
     filterset_fields = ['target', 'content_type', 'is_completed']
     ordering = ['-started_at']
+
+    def create(self, request, *args, **kwargs):
+        from apps.core.cache_bus import redis_enabled
+        if not redis_enabled():
+            return Response(
+                {'detail': "Xabar yuborish uchun Redis va ishlab turgan bot jarayoni "
+                           "kerak (USE_REDIS=True). Hozir mavjud emas."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return super().create(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        obj = serializer.save()
+        # bot jarayoniga "shu broadcast'ni yubor" signalini beramiz
+        publish_invalidation('broadcast', id=obj.id)
 
 
 # ---------------------------------------------------------------------------

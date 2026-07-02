@@ -73,7 +73,15 @@ async def run_invalidation_listener() -> None:
                     raw = message['data']
                     if isinstance(raw, (bytes, bytearray)):
                         raw = raw.decode('utf-8')
-                    _apply_invalidation(json.loads(raw))
+                    payload = json.loads(raw)
+                    if payload.get('kind') == 'broadcast':
+                        # Dashboard'dan ishga tushirilgan xabar yuborish -> alohida task
+                        from bot.utils.broadcast_sender import send_broadcast
+                        bid = payload.get('id')
+                        if bid is not None:
+                            asyncio.create_task(send_broadcast(bid))
+                    else:
+                        _apply_invalidation(payload)
                 except Exception as e:
                     logger.warning(f"Invalidatsiya xabarini qayta ishlashda xato: {e}")
         except asyncio.CancelledError:
