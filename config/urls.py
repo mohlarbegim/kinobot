@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from django.contrib import admin
+# XAVFSIZLIK: Django admin (/admin/) o'chirildi - o'rniga /dashboard/ (React) ishlatiladi.
+# Qayta yoqish kerak bo'lsa: `from django.contrib import admin` ni tiklang va
+# quyidagi urlpatterns ga `path('admin/', admin.site.urls)` ni qo'shing.
 from django.urls import path, re_path, include
 from django.conf import settings
 from django.conf.urls.static import static
@@ -59,8 +61,7 @@ urlpatterns = [
     # REST API (React dashboard)
     path('api/', include('apps.api.urls')),
 
-    # Django admin (React tayyor bo'lgach o'chiriladi)
-    path('admin/', admin.site.urls),
+    # Django admin O'CHIRILDI (xavfsizlik) - React /dashboard/ ishlatiladi.
 
     # React SPA
     path('dashboard/', dashboard_spa, name='dashboard'),
