@@ -39,8 +39,11 @@ COPY --from=frontend /static/dashboard /app/static/dashboard
 # Create directories
 RUN mkdir -p static staticfiles media
 
-# Collect static (React dashboard ham shu yerda yig'iladi)
-RUN python manage.py collectstatic --noinput --clear 2>/dev/null || echo "Collectstatic skipped"
+# Collect static (React dashboard ham shu yerda yig'iladi).
+# Build paytida env yo'q -> DEBUG=False bo'lsa settings SECRET_KEY talab qiladi;
+# shuning uchun vaqtinchalik dummy SECRET_KEY beramiz (faqat build uchun, DB'ga tegmaydi).
+# Xato bo'lsa build TO'XTAYDI (avval jim o'tkazib yuborilardi -> static yig'ilmasdi).
+RUN SECRET_KEY=collectstatic-build-only python manage.py collectstatic --noinput --clear
 
 # Expose port
 EXPOSE 8000
