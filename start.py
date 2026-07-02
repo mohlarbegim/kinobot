@@ -16,6 +16,15 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 
 PORT = os.getenv('PORT', '8000')
 
+# RUN_MODE: qaysi jarayonlar ishga tushishini belgilaydi.
+#   'both' (default) - gunicorn (web/admin) + Telegram bot birga (bitta xizmatli setup)
+#   'web'            - faqat gunicorn (admin panel/health). Bot ishga tushmaydi -> BOT_TOKEN shart emas.
+#   'bot'            - faqat Telegram bot. Gunicorn yo'q (healthcheck kerak bo'lmagan xizmat uchun).
+RUN_MODE = os.getenv('RUN_MODE', 'both').lower()
+if RUN_MODE not in ('both', 'web', 'bot'):
+    print(f"WARNING: noma'lum RUN_MODE={RUN_MODE!r} - 'both' ishlatiladi")
+    RUN_MODE = 'both'
+
 # Global process references for cleanup
 bot_process = None
 gunicorn_process = None
@@ -130,73 +139,82 @@ if __name__ == '__main__':
     signal.signal(signal.SIGTERM, signal_handler)
 
     print("=" * 50)
-    print("Starting KinoBot Services...")
+    print(f"Starting KinoBot Services... (RUN_MODE={RUN_MODE})")
     print("=" * 50)
 
-    # Check environment
-    env_ok = check_environment()
-    if not env_ok:
-        print("FATAL: BOT_TOKEN o'rnatilmagan - bot ishga tusha olmaydi. To'xtatildi.")
-        sys.exit(1)
+    run_web = RUN_MODE in ('both', 'web')
+    run_bot = RUN_MODE in ('both', 'bot')
+
+    # Bot ishga tushadigan rejimlarda BOT_TOKEN majburiy
+    if run_bot:
+        env_ok = check_environment()
+        if not env_ok:
+            print("FATAL: BOT_TOKEN o'rnatilmagan - bot ishga tusha olmaydi. To'xtatildi.")
+            sys.exit(1)
+    else:
+        print("RUN_MODE=web: bot ishga tushirilmaydi (faqat gunicorn/admin).")
 
     # Check database connection
     db_ok = check_database_connection()
 
-    # Run migrations (faqat database ishlayotgan bo'lsa)
-    if db_ok:
+    # Migratsiyalar faqat bot/both rejimida bajariladi. web rejimi migratsiya qilmaydi -
+    # aks holda web va bot bir vaqtda migrate qilib poyga (race) bo'lishi mumkin.
+    # Migratsiyalarni bot xizmati boshqaradi.
+    if db_ok and run_bot:
         run_migrations()
-    else:
+    elif not db_ok:
         print("Skipping migrations due to database connection issues")
+    else:
+        print("RUN_MODE=web: migratsiyalar o'tkazib yuborildi (bot xizmati bajaradi).")
 
-    # Start gunicorn FIRST (for health check)
-    print(f"\nStarting Django/Gunicorn on port {PORT}...")
-    gunicorn_process = subprocess.Popen(
-        [
-            sys.executable, '-m', 'gunicorn',
-            'config.wsgi:application',
-            '--bind', f'0.0.0.0:{PORT}',
-            '--workers', '1',
-            '--threads', '2',
-            '--timeout', '120',
-            '--access-logfile', '-',
-            '--error-logfile', '-',
-            '--capture-output',
-            '--enable-stdio-inheritance',
-        ],
-        stdout=sys.stdout,
-        stderr=sys.stderr,
-    )
+    # Gunicorn (web/both) - health check uchun BIRINCHI ishga tushadi
+    if run_web:
+        print(f"\nStarting Django/Gunicorn on port {PORT}...")
+        gunicorn_process = subprocess.Popen(
+            [
+                sys.executable, '-m', 'gunicorn',
+                'config.wsgi:application',
+                '--bind', f'0.0.0.0:{PORT}',
+                '--workers', '1',
+                '--threads', '2',
+                '--timeout', '120',
+                '--access-logfile', '-',
+                '--error-logfile', '-',
+                '--capture-output',
+                '--enable-stdio-inheritance',
+            ],
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        )
+        if not wait_for_gunicorn():
+            print("Failed to start gunicorn!")
+            sys.exit(1)
 
-    # Wait for gunicorn
-    if not wait_for_gunicorn():
-        print("Failed to start gunicorn!")
-        sys.exit(1)
-
-    # Start bot
-    print("\nStarting Telegram bot...")
-    bot_process = subprocess.Popen(
-        [sys.executable, '-m', 'bot.main'],
-        cwd=os.path.dirname(os.path.abspath(__file__)),
-        stdout=sys.stdout,
-        stderr=sys.stderr,
-    )
+    # Bot (bot/both)
+    if run_bot:
+        print("\nStarting Telegram bot...")
+        bot_process = subprocess.Popen(
+            [sys.executable, '-m', 'bot.main'],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        )
 
     print("=" * 50)
     print("All services started!")
     print("=" * 50)
 
-    # Ikkala jarayonni ham kuzatamiz. Biri o'lsa (masalan bot polling xatosi bilan
-    # tugasa), ikkinchisini to'xtatib, xato kodi bilan chiqamiz -> Railway qayta ishga
-    # tushiradi. Aks holda bot o'lsa ham gunicorn /health/ ga javob berib "healthy"
-    # qolardi va bot jimgina o'lik bo'lardi.
+    # Ishlab turgan jarayon(lar)ni kuzatamiz. Biri o'lsa, xato kodi bilan chiqamiz ->
+    # Railway qayta ishga tushiradi. Aks holda bot o'lsa ham gunicorn /health/ ga javob
+    # berib "healthy" qolardi va bot jimgina o'lik bo'lardi.
     exit_code = 0
     while True:
-        if gunicorn_process.poll() is not None:
-            print(f"Gunicorn to'xtadi (code={gunicorn_process.returncode}). Bot ham to'xtatilmoqda...")
+        if run_web and gunicorn_process.poll() is not None:
+            print(f"Gunicorn to'xtadi (code={gunicorn_process.returncode}).")
             exit_code = gunicorn_process.returncode or 1
             break
-        if bot_process.poll() is not None:
-            print(f"Bot jarayoni to'xtadi (code={bot_process.returncode}). Gunicorn ham to'xtatilmoqda...")
+        if run_bot and bot_process.poll() is not None:
+            print(f"Bot jarayoni to'xtadi (code={bot_process.returncode}).")
             exit_code = bot_process.returncode or 1
             break
         time.sleep(5)
