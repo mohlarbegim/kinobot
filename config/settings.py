@@ -9,16 +9,20 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Test muhitini aniqlash (pytest yoki `manage.py test`). Testlarda haqiqiy SECRET_KEY
+# talab qilinmaydi; prod'da pytest bo'lmaydi, shuning uchun bu qoida kuchda qoladi.
+_TESTING = 'pytest' in sys.modules or 'test' in sys.argv
+
 # Security: SECRET_KEY must be set in production
 SECRET_KEY = os.getenv('SECRET_KEY')
 if not SECRET_KEY:
-    if os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes'):
+    if _TESTING or os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes'):
         SECRET_KEY = 'django-insecure-dev-only-key-do-not-use-in-production'
         logging.warning("WARNING: Using insecure SECRET_KEY. Set SECRET_KEY in .env for production!")
     else:
         raise ValueError("SECRET_KEY environment variable must be set in production!")
 
-DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
+DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
 # Security: Don't allow all hosts in production
 _allowed_hosts = os.getenv('ALLOWED_HOSTS', '')
@@ -31,7 +35,7 @@ else:
         ALLOWED_HOSTS = ['.railway.app']  # Railway default
 
 # Railway specific
-CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if os.getenv('CSRF_TRUSTED_ORIGINS') else []
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if o.strip()]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -153,9 +157,17 @@ STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static'] if (BASE_DIR / 'static').exists() else []
 
-# Whitenoise for static files
-# CompressedStaticFilesStorage - manifest xatolarini oldini oladi
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
+# Whitenoise for static files (STORAGES - Django 4.2+; STATICFILES_STORAGE 5.1 da
+# olib tashlangan, requirements Django<6.0 ga ruxsat beradi). CompressedStaticFilesStorage
+# manifest xatolarini oldini oladi.
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
 
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -164,7 +176,23 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Bot settings
 BOT_TOKEN = os.getenv('BOT_TOKEN', '')
-ADMINS = [int(x) for x in os.getenv('ADMINS', '').split(',') if x.strip()]
+
+
+def _parse_admin_ids(raw: str):
+    """ADMINS ni xavfsiz o'qish - raqam bo'lmagan qiymat butun ilovani buzmasligi uchun."""
+    admin_ids = []
+    for part in raw.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            admin_ids.append(int(part))
+        except ValueError:
+            logging.warning("ADMINS: noto'g'ri (raqam bo'lmagan) qiymat o'tkazib yuborildi: %r", part)
+    return admin_ids
+
+
+ADMINS = _parse_admin_ids(os.getenv('ADMINS', ''))
 
 # Payment settings
 DEFAULT_CARD_NUMBER = os.getenv('DEFAULT_CARD_NUMBER', '8600 0000 0000 0000')

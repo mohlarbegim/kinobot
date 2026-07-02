@@ -21,17 +21,24 @@ def get_expiring_premium_users(days: int = 1):
     now = timezone.now()
     target_date = now + timedelta(days=days)
 
-    # 1 kun ichida tugaydigan premium userlar
+    # 1 kun ichida tugaydigan, lekin hali eslatma OLMAGAN premium userlar.
+    # premium_expiry_notified=False sharti har soatlik takroriy spamning oldini oladi.
     users = User.objects.filter(
         is_premium=True,
         premium_expires__gte=now,
         premium_expires__lte=target_date,
-        is_banned=False
-    ).exclude(
-        # Allaqachon eslatma yuborilganlarni o'tkazib yuborish (keyinchalik qo'shiladi)
+        is_banned=False,
+        premium_expiry_notified=False,
     )
 
     return list(users)
+
+
+@sync_to_async
+def mark_expiry_notified(user_id: int):
+    """Tugash eslatmasi yuborilganini belgilash (takror yubormaslik uchun)."""
+    from apps.users.models import User
+    User.objects.filter(user_id=user_id).update(premium_expiry_notified=True)
 
 
 @sync_to_async
@@ -58,7 +65,9 @@ def deactivate_expired_premium(user_id: int):
     try:
         user = User.objects.get(user_id=user_id)
         user.is_premium = False
-        user.save(update_fields=['is_premium'])
+        # Bayroqni tozalaymiz, shunda keyingi premium sotib olishda yana eslatma boradi.
+        user.premium_expiry_notified = False
+        user.save(update_fields=['is_premium', 'premium_expiry_notified'])
         return True
     except User.DoesNotExist:
         return False
@@ -132,7 +141,10 @@ async def check_premium_expiry(bot: Bot):
 
     for user in expiring_users:
         days_left = max(0, (user.premium_expires - timezone.now()).days)
-        await send_premium_expiry_notification(bot, user.user_id, days_left)
+        sent = await send_premium_expiry_notification(bot, user.user_id, days_left)
+        if sent:
+            # Faqat muvaffaqiyatli yuborilgan bo'lsa belgilaymiz -> takror spam bo'lmaydi.
+            await mark_expiry_notified(user.user_id)
         await asyncio.sleep(0.1)  # Rate limit uchun
 
     # Tugagan userlar

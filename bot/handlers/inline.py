@@ -4,6 +4,7 @@ from asgiref.sync import sync_to_async
 from hashlib import md5
 
 from apps.movies.models import Movie
+from bot.utils import esc
 
 router = Router()
 
@@ -59,7 +60,7 @@ async def inline_search(inline_query: InlineQuery):
                 video_file_id=movie.file_id,
                 title=movie.display_title,
                 description=f"📝 Kod: {movie.code}",
-                caption=f"🎬 <b>{movie.display_title}</b>\n📝 Kod: <code>{movie.code}</code>",
+                caption=f"🎬 <b>{esc(movie.display_title)}</b>\n📝 Kod: <code>{esc(movie.code)}</code>",
                 parse_mode="HTML"
             )
             results.append(result)
@@ -70,7 +71,7 @@ async def inline_search(inline_query: InlineQuery):
                 title=movie.display_title,
                 description=f"📝 Kod: {movie.code}",
                 input_message_content=InputTextMessageContent(
-                    message_text=f"🎬 <b>{movie.display_title}</b>\n📝 Kod: <code>{movie.code}</code>",
+                    message_text=f"🎬 <b>{esc(movie.display_title)}</b>\n📝 Kod: <code>{esc(movie.code)}</code>",
                     parse_mode="HTML"
                 )
             )

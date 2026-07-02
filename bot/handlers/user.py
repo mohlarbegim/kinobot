@@ -18,9 +18,9 @@ from bot.keyboards import (
     main_menu_inline_kb, channels_kb, categories_kb, movies_kb,
     tariffs_kb, back_kb, movie_action_kb, saved_movies_kb,
     search_filter_kb, filter_country_kb, filter_language_kb, filter_year_kb,
-    flash_sale_tariffs_kb
+    flash_sale_tariffs_kb, filter_movies_kb
 )
-from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions
+from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, esc
 from apps.payments.models import PendingPaymentSession
 from datetime import timedelta
 from django.utils import timezone as dj_timezone
@@ -130,7 +130,7 @@ async def cmd_start(message: Message, bot: Bot):
         _pending_subscriptions[user.id] = [ch.id for ch in not_subscribed]
 
         await message.answer(
-            f"👋 Salom, <b>{user.full_name}</b>!\n\n"
+            f"👋 Salom, <b>{esc(user.full_name)}</b>!\n\n"
             "📢 Botdan foydalanish uchun kanallarga obuna bo'ling:\n\n"
             "✅ <b>Tekshirish</b> tugmasini bosing.",
             reply_markup=channels_kb(not_subscribed)
@@ -144,7 +144,7 @@ async def cmd_start(message: Message, bot: Bot):
         status = "🎁 Trial\n\n"
 
     await message.answer(
-        f"👋 Salom, <b>{user.full_name}</b>!\n\n"
+        f"👋 Salom, <b>{esc(user.full_name)}</b>!\n\n"
         f"{status}"
         "🎬 Kino kodini yuboring yoki menyu tugmalaridan foydalaning:",
         reply_markup=main_menu_inline_kb(is_admin=is_admin)
@@ -273,10 +273,10 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
         return
 
     # Premium check
-    if movie.is_premium and db_user and not db_user.is_premium_active and not db_user.is_trial_active:
+    if movie.is_premium and not (db_user and db_user.can_watch_movies):
         is_admin = await is_user_admin(user_id)
         await message.answer(
-            f"💎 <b>{movie.display_title}</b>\n\n"
+            f"💎 <b>{esc(movie.display_title)}</b>\n\n"
             "Bu kino faqat Premium foydalanuvchilar uchun.\n\n"
             "Premium olish uchun 💎 Premium tugmasini bosing.",
             reply_markup=main_menu_inline_kb(is_admin=is_admin)
@@ -287,13 +287,13 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
     try:
         bot_link = await get_bot_link(bot)
 
-        desc = f"\n\n📖 {movie.description}" if movie.description else ""
+        desc = f"\n\n📖 {esc(movie.description)}" if movie.description else ""
         year_text = f"📅 Yil: {movie.year}\n" if movie.year else ""
         country_text = f"🌍 Davlat: {movie.get_country_display()}\n" if hasattr(movie, 'get_country_display') else ""
 
         caption = (
-            f"🎬 <b>{movie.display_title}</b>{desc}\n\n"
-            f"📝 Kod: <code>{movie.code}</code>\n"
+            f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
+            f"📝 Kod: <code>{esc(movie.code)}</code>\n"
             f"{year_text}"
             f"{country_text}"
             f"📺 Sifat: {movie.get_quality_display()}\n"
@@ -353,7 +353,7 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
         return
 
     # Premium tekshirish
-    if movie.is_premium and db_user and not db_user.is_premium_active and not db_user.is_trial_active:
+    if movie.is_premium and not (db_user and db_user.can_watch_movies):
         await callback.answer("💎 Bu Premium kino! Premium olish uchun menudagi tugmani bosing.", show_alert=True)
         return
 
@@ -369,12 +369,12 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
             await bot.send_video(
                 chat_id=callback.from_user.id,
                 video=movie.file_id,
-                caption=f"🎬 <b>{movie.display_title}</b>\n\n📝 Kod: <code>{movie.code}</code>",
+                caption=f"🎬 <b>{esc(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>",
                 reply_markup=movie_action_kb(movie.code, is_saved)
             )
         else:
             await callback.message.answer(
-                f"🎬 <b>{movie.display_title}</b>\n\n📝 Kod: <code>{movie.code}</code>\n\n⚠️ Video fayl topilmadi.",
+                f"🎬 <b>{esc(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>\n\n⚠️ Video fayl topilmadi.",
                 reply_markup=movie_action_kb(movie.code, is_saved)
             )
     except TelegramBadRequest as e:
@@ -435,29 +435,49 @@ async def filter_year_callback(callback: CallbackQuery):
     await callback.answer()
 
 
+# Filtr nomlari (bir nechta handler ishlatadi)
+COUNTRY_NAMES = {
+    'usa': '🇺🇸 AQSH', 'korea': '🇰🇷 Koreya', 'india': '🇮🇳 Hindiston',
+    'turkey': '🇹🇷 Turkiya', 'russia': '🇷🇺 Rossiya', 'uzbekistan': '🇺🇿 O\'zbekiston',
+    'japan': '🇯🇵 Yaponiya', 'china': '🇨🇳 Xitoy'
+}
+LANG_NAMES = {
+    'uzbek': "🇺🇿 O'zbekcha", 'rus': '🇷🇺 Ruscha', 'eng': '🇺🇸 Inglizcha',
+    'turk': '🇹🇷 Turkcha', 'korea': '🇰🇷 Koreyscha'
+}
+
+
+async def _show_filter_results(callback, filter_type, filter_value, page, movies, total_pages):
+    """Filtr (davlat/til/yil) natijalarini ko'rsatish - birinchi sahifa va pagination uchun."""
+    if filter_type == 'country':
+        name = COUNTRY_NAMES.get(filter_value, filter_value)
+        header = f"🌍 <b>{esc(name)} kinolari:</b>"
+        empty = f"📭 {name} kinolari topilmadi"
+    elif filter_type == 'language':
+        name = LANG_NAMES.get(filter_value, filter_value)
+        header = f"🌐 <b>{esc(name)} kinolar:</b>"
+        empty = f"📭 {name} kinolar topilmadi"
+    else:  # year
+        header = f"📅 <b>{esc(filter_value)}-yil kinolari:</b>"
+        empty = f"📭 {filter_value}-yil kinolari topilmadi"
+
+    if not movies:
+        await callback.answer(empty, show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        f"{header}\n\nJami: {len(movies)} ta",
+        reply_markup=filter_movies_kb(movies, filter_type, filter_value, page=page, total_pages=total_pages)
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("filter_country:"))
 async def filter_country_result_callback(callback: CallbackQuery):
     """Davlat bo'yicha natijalar"""
     country = callback.data.split(":")[1]
     movies, total_pages = await get_movies_by_filter(country=country, page=1)
-
-    country_names = {
-        'usa': '🇺🇸 AQSH', 'korea': '🇰🇷 Koreya', 'india': '🇮🇳 Hindiston',
-        'turkey': '🇹🇷 Turkiya', 'russia': '🇷🇺 Rossiya', 'uzbekistan': '🇺🇿 O\'zbekiston',
-        'japan': '🇯🇵 Yaponiya', 'china': '🇨🇳 Xitoy'
-    }
-    country_name = country_names.get(country, country)
-
-    if not movies:
-        await callback.answer(f"📭 {country_name} kinolari topilmadi", show_alert=True)
-        return
-
-    await callback.message.edit_text(
-        f"🌍 <b>{country_name} kinolari:</b>\n\n"
-        f"Jami: {len(movies)} ta",
-        reply_markup=movies_kb(movies, page=1, total_pages=total_pages)
-    )
-    await callback.answer()
+    await _show_filter_results(callback, 'country', country, 1, movies, total_pages)
 
 
 @router.callback_query(F.data.startswith("filter_language:"))
@@ -465,41 +485,36 @@ async def filter_language_result_callback(callback: CallbackQuery):
     """Til bo'yicha natijalar"""
     language = callback.data.split(":")[1]
     movies, total_pages = await get_movies_by_filter(language=language, page=1)
-
-    lang_names = {
-        'uzbek': "🇺🇿 O'zbekcha", 'rus': '🇷🇺 Ruscha', 'eng': '🇺🇸 Inglizcha',
-        'turk': '🇹🇷 Turkcha', 'korea': '🇰🇷 Koreyscha'
-    }
-    lang_name = lang_names.get(language, language)
-
-    if not movies:
-        await callback.answer(f"📭 {lang_name} kinolar topilmadi", show_alert=True)
-        return
-
-    await callback.message.edit_text(
-        f"🌐 <b>{lang_name} kinolar:</b>\n\n"
-        f"Jami: {len(movies)} ta",
-        reply_markup=movies_kb(movies, page=1, total_pages=total_pages)
-    )
-    await callback.answer()
+    await _show_filter_results(callback, 'language', language, 1, movies, total_pages)
 
 
 @router.callback_query(F.data.startswith("filter_year:"))
 async def filter_year_result_callback(callback: CallbackQuery):
     """Yil bo'yicha natijalar"""
-    year = int(callback.data.split(":")[1])
-    movies, total_pages = await get_movies_by_filter(year=year, page=1)
+    year = callback.data.split(":")[1]
+    movies, total_pages = await get_movies_by_filter(year=int(year), page=1)
+    await _show_filter_results(callback, 'year', year, 1, movies, total_pages)
 
-    if not movies:
-        await callback.answer(f"📭 {year}-yil kinolari topilmadi", show_alert=True)
+
+@router.callback_query(F.data.startswith("filter_page:"))
+async def filter_page_callback(callback: CallbackQuery):
+    """Filtr natijalari pagination - filtrni saqlab keyingi sahifani ko'rsatadi."""
+    parts = callback.data.split(":")
+    filter_type = parts[1]
+    filter_value = parts[2]
+    page = int(parts[3])
+
+    if filter_type == 'country':
+        movies, total_pages = await get_movies_by_filter(country=filter_value, page=page)
+    elif filter_type == 'language':
+        movies, total_pages = await get_movies_by_filter(language=filter_value, page=page)
+    elif filter_type == 'year':
+        movies, total_pages = await get_movies_by_filter(year=int(filter_value), page=page)
+    else:
+        await callback.answer()
         return
 
-    await callback.message.edit_text(
-        f"📅 <b>{year}-yil kinolari:</b>\n\n"
-        f"Jami: {len(movies)} ta",
-        reply_markup=movies_kb(movies, page=1, total_pages=total_pages)
-    )
-    await callback.answer()
+    await _show_filter_results(callback, filter_type, filter_value, page, movies, total_pages)
 
 
 # ==================== TOP KINOLAR ====================
@@ -515,8 +530,8 @@ async def top_movies_callback(callback: CallbackQuery):
 
     text = "🔥 <b>Top 10 kinolar:</b>\n\n"
     for i, movie in enumerate(movies, 1):
-        text += f"{i}. 🎬 <b>{movie.display_title}</b>\n"
-        text += f"    📝 Kod: <code>{movie.code}</code> • 👁 {format_number(movie.views)}\n\n"
+        text += f"{i}. 🎬 <b>{esc(movie.display_title)}</b>\n"
+        text += f"    📝 Kod: <code>{esc(movie.code)}</code> • 👁 {format_number(movie.views)}\n\n"
 
     text += "📥 Kino olish uchun kodini yuboring."
 
@@ -535,8 +550,8 @@ async def top_movies_handler(message: Message):
 
     text = "🔥 <b>Top 10 kinolar:</b>\n\n"
     for i, movie in enumerate(movies, 1):
-        text += f"{i}. 🎬 <b>{movie.display_title}</b>\n"
-        text += f"    📝 Kod: <code>{movie.code}</code> • 👁 {format_number(movie.views)}\n\n"
+        text += f"{i}. 🎬 <b>{esc(movie.display_title)}</b>\n"
+        text += f"    📝 Kod: <code>{esc(movie.code)}</code> • 👁 {format_number(movie.views)}\n\n"
 
     text += "📥 Kino olish uchun kodini yuboring."
 
@@ -548,6 +563,11 @@ async def top_movies_handler(message: Message):
 @router.callback_query(F.data.startswith("premium_movies"))
 async def premium_movies_callback(callback: CallbackQuery, db_user: User = None):
     """Premium kinolar - videolar bilan"""
+    # Premium/trial bo'lmagan foydalanuvchilarga premium video katalogini bermaymiz
+    if not (db_user and db_user.can_watch_movies):
+        await callback.answer("💎 Bu bo'lim faqat Premium foydalanuvchilar uchun.", show_alert=True)
+        return
+
     # Sahifa raqamini olish
     parts = callback.data.split(":")
     page = int(parts[1]) if len(parts) > 1 else 1
@@ -575,7 +595,7 @@ async def premium_movies_callback(callback: CallbackQuery, db_user: User = None)
         try:
             await callback.message.answer_video(
                 video=movie.file_id,
-                caption=f"📝 Kod: <code>{movie.code}</code>"
+                caption=f"📝 Kod: <code>{esc(movie.code)}</code>"
             )
         except Exception:
             pass
@@ -611,8 +631,8 @@ async def new_movies_callback(callback: CallbackQuery):
     text = "🆕 <b>Yangi kinolar:</b>\n\n"
     for movie in movies:
         premium = "💎 " if movie.is_premium else ""
-        text += f"{premium}🎬 <b>{movie.display_title}</b>\n"
-        text += f"    📝 Kod: <code>{movie.code}</code>\n\n"
+        text += f"{premium}🎬 <b>{esc(movie.display_title)}</b>\n"
+        text += f"    📝 Kod: <code>{esc(movie.code)}</code>\n\n"
 
     text += "📥 Kino olish uchun kodini yuboring."
 
@@ -632,8 +652,8 @@ async def last_movies_handler(message: Message):
     text = "🆕 <b>Yangi kinolar:</b>\n\n"
     for movie in movies:
         premium = "💎 " if movie.is_premium else ""
-        text += f"{premium}🎬 <b>{movie.display_title}</b>\n"
-        text += f"    📝 Kod: <code>{movie.code}</code>\n\n"
+        text += f"{premium}🎬 <b>{esc(movie.display_title)}</b>\n"
+        text += f"    📝 Kod: <code>{esc(movie.code)}</code>\n\n"
 
     text += "📥 Kino olish uchun kodini yuboring."
 
@@ -663,10 +683,10 @@ async def random_movie_handler(message: Message, db_user: User = None, bot: Bot 
         await message.answer("📭 Kinolar topilmadi.", reply_markup=back_kb())
         return
 
-    if movie.is_premium and db_user and not db_user.is_premium_active:
+    if movie.is_premium and not (db_user and db_user.can_watch_movies):
         is_admin = await is_user_admin(user_id)
         await message.answer(
-            f"💎 <b>{movie.display_title}</b>\n\n"
+            f"💎 <b>{esc(movie.display_title)}</b>\n\n"
             "Premium kino tushdi! Premium olish uchun 💎 Premium tugmasini bosing.",
             reply_markup=main_menu_inline_kb(is_admin=is_admin)
         )
@@ -675,15 +695,15 @@ async def random_movie_handler(message: Message, db_user: User = None, bot: Bot 
     try:
         bot_link = await get_bot_link(bot)
 
-        desc = f"\n📖 {movie.description}" if movie.description else ""
+        desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
 
         await message.answer_video(
             video=movie.file_id,
             caption=(
                 f"🎲 <b>Random kino:</b>\n\n"
-                f"🎬 <b>{movie.display_title}</b>{desc}\n\n"
-                f"📝 Kod: <code>{movie.code}</code>\n"
+                f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
+                f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
             ),
@@ -874,7 +894,7 @@ async def movie_callback(callback: CallbackQuery, db_user: User = None, bot: Bot
         await callback.answer("❌ Kino topilmadi.", show_alert=True)
         return
 
-    if movie.is_premium and db_user and not db_user.is_premium_active:
+    if movie.is_premium and not (db_user and db_user.can_watch_movies):
         await callback.answer("💎 Bu Premium kino!", show_alert=True)
         return
 
@@ -883,14 +903,14 @@ async def movie_callback(callback: CallbackQuery, db_user: User = None, bot: Bot
     try:
         bot_link = await get_bot_link(bot)
 
-        desc = f"\n📖 {movie.description}" if movie.description else ""
+        desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
 
         await callback.message.answer_video(
             video=movie.file_id,
             caption=(
-                f"🎬 <b>{movie.display_title}</b>{desc}\n\n"
-                f"📝 Kod: <code>{movie.code}</code>\n"
+                f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
+                f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n"
                 f"👁 {format_number(movie.views)}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
@@ -913,7 +933,7 @@ async def premium_callback(callback: CallbackQuery, db_user: User = None):
     if db_user and db_user.is_premium_active:
         await callback.message.edit_text(
             f"💎 <b>Sizda Premium mavjud!</b>\n\n"
-            f"📅 Amal qilish muddati: {db_user.premium_expires.strftime('%d.%m.%Y')}\n"
+            f"📅 Amal qilish muddati: {db_user.premium_expires.strftime('%d.%m.%Y') if db_user.premium_expires else 'Muddatsiz'}\n"
             f"⏳ Qolgan kunlar: {db_user.days_left}",
             reply_markup=back_kb()
         )
@@ -980,7 +1000,7 @@ async def premium_handler(message: Message, db_user: User = None):
     if db_user and db_user.is_premium_active:
         await message.answer(
             f"💎 <b>Sizda Premium mavjud!</b>\n\n"
-            f"📅 Amal qilish muddati: {db_user.premium_expires.strftime('%d.%m.%Y')}\n"
+            f"📅 Amal qilish muddati: {db_user.premium_expires.strftime('%d.%m.%Y') if db_user.premium_expires else 'Muddatsiz'}\n"
             f"⏳ Qolgan kunlar: {db_user.days_left}",
             reply_markup=back_kb()
         )
@@ -1065,12 +1085,12 @@ async def flash_tariff_callback(callback: CallbackQuery, db_user: User = None):
 
     await callback.message.edit_text(
         f"💳 <b>To'lov</b>\n\n"
-        f"📦 Tarif: {tariff.name}\n"
+        f"📦 Tarif: {esc(tariff.name)}\n"
         f"⏳ Muddat: {tariff.days} kun\n"
         f"💰 Narxi: <b>{price_text}</b>\n\n"
         f"📋 <b>Karta ma'lumotlari:</b>\n"
-        f"💳 {settings.card_number if settings else '8600 1234 5678 9012'}\n"
-        f"👤 {settings.card_holder if settings else 'CARDHOLDER NAME'}\n\n"
+        f"💳 {esc(settings.card_number) if settings else '8600 1234 5678 9012'}\n"
+        f"👤 {esc(settings.card_holder) if settings else 'CARDHOLDER NAME'}\n\n"
         f"⚠️ Izoh: Chekda <code>{callback.from_user.id}</code> ni ko'rsating.\n\n"
         f"✅ To'lovni amalga oshiring va chekni yuboring:",
         reply_markup=back_kb()
@@ -1134,7 +1154,7 @@ async def profile_callback(callback: CallbackQuery, db_user: User = None):
     await callback.message.edit_text(
         f"👤 <b>Profil</b>\n\n"
         f"🆔 ID: <code>{db_user.user_id}</code>\n"
-        f"👤 Ism: {db_user.full_name}\n"
+        f"👤 Ism: {esc(db_user.full_name)}\n"
         f"📊 Status: {status}\n"
         f"🎬 Ko'rilgan: {format_number(db_user.movies_watched)}\n\n"
         f"🔗 <b>Referal:</b>\n"
@@ -1167,7 +1187,7 @@ async def profile_handler(message: Message, db_user: User = None):
     await message.answer(
         f"👤 <b>Profil</b>\n\n"
         f"🆔 ID: <code>{db_user.user_id}</code>\n"
-        f"👤 Ism: {db_user.full_name}\n"
+        f"👤 Ism: {esc(db_user.full_name)}\n"
         f"📊 Status: {status}\n"
         f"🎬 Ko'rilgan: {format_number(db_user.movies_watched)}\n\n"
         f"🔗 <b>Referal:</b>\n"
@@ -1304,7 +1324,7 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
         return
 
     # Premium check
-    if movie.is_premium and db_user and not db_user.is_premium_active:
+    if movie.is_premium and not (db_user and db_user.can_watch_movies):
         await callback.answer("💎 Bu Premium kino!", show_alert=True)
         return
 
@@ -1314,15 +1334,15 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
         bot_info = await bot.me()
         bot_link = f"https://t.me/{bot_info.username}"
 
-        desc = f"\n📖 {movie.description}" if movie.description else ""
+        desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
 
         await callback.message.answer_video(
             video=movie.file_id,
             caption=(
                 f"❤️ <b>Saqlangan kino:</b>\n\n"
-                f"🎬 <b>{movie.display_title}</b>{desc}\n\n"
-                f"📝 Kod: <code>{movie.code}</code>\n"
+                f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
+                f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n"
                 f"👁 {format_number(movie.views)}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
@@ -1351,7 +1371,7 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
         await callback.answer("📭 Kinolar topilmadi.", show_alert=True)
         return
 
-    if movie.is_premium and db_user and not db_user.is_premium_active:
+    if movie.is_premium and not (db_user and db_user.can_watch_movies):
         await callback.answer("💎 Premium kino tushdi! Premium oling.", show_alert=True)
         return
 
@@ -1360,7 +1380,7 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
     try:
         bot_link = await get_bot_link(bot)
 
-        desc = f"\n📖 {movie.description}" if movie.description else ""
+        desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
         is_saved = await check_movie_saved(user_id, movie.code) if db_user else False
 
@@ -1368,8 +1388,8 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
             video=movie.file_id,
             caption=(
                 f"🎲 <b>Random kino:</b>\n\n"
-                f"🎬 <b>{movie.display_title}</b>{desc}\n\n"
-                f"📝 Kod: <code>{movie.code}</code>\n"
+                f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
+                f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
             ),
@@ -1416,11 +1436,13 @@ async def check_subscription(bot: Bot, user_id: int) -> list:
             member = await bot.get_chat_member(channel.channel_id, user_id)
             if member.status in ['left', 'kicked']:
                 not_subscribed.append(channel)
-        except TelegramBadRequest:
-            # Bot kanalda admin emas yoki kanal topilmadi
-            not_subscribed.append(channel)
-        except Exception:
-            not_subscribed.append(channel)
+        except TelegramBadRequest as e:
+            # Bot kanalni tekshira olmadi (admin emas / kanal topilmadi) -> foydalanuvchini
+            # BLOKLAMAYMIZ (fail-open), aks holda bitta noto'g'ri kanal hammani qulflaydi.
+            # Middleware bilan bir xil xatti-harakat; admin ko'rishi uchun log yozamiz.
+            logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
+        except Exception as e:
+            logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
 
     return not_subscribed
 

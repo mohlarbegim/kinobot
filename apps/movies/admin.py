@@ -18,8 +18,8 @@ class CategoryAdmin(admin.ModelAdmin):
 
 @admin.register(Movie)
 class MovieAdmin(admin.ModelAdmin):
-    list_display = ['code', 'title', 'category', 'quality', 'views', 'premium_badge', 'is_active']
-    list_filter = ['category', 'quality', 'language', 'is_premium', 'is_active']
+    list_display = ['code', 'title', 'category', 'country', 'quality', 'views', 'premium_badge', 'is_active']
+    list_filter = ['category', 'country', 'quality', 'language', 'is_premium', 'is_active']
     search_fields = ['code', 'title', 'title_uz']
     readonly_fields = ['views', 'created_at']
     ordering = ['-created_at']
@@ -32,7 +32,7 @@ class MovieAdmin(admin.ModelAdmin):
             'fields': ('file_id', 'thumbnail_file_id')
         }),
         ('Ma\'lumotlar', {
-            'fields': ('year', 'duration', 'quality', 'language', 'description')
+            'fields': ('year', 'duration', 'quality', 'language', 'country', 'description')
         }),
         ('Holat', {
             'fields': ('is_premium', 'is_active')

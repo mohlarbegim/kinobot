@@ -17,7 +17,7 @@ class ThrottlingMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
-        if isinstance(event, Message):
+        if isinstance(event, Message) and event.from_user:
             user_id = event.from_user.id
 
             if user_id in self.cache:

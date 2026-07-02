@@ -116,6 +116,42 @@ def movies_kb(movies: list, page: int = 1, total_pages: int = 1, category_id: in
     return builder.as_markup()
 
 
+def filter_movies_kb(movies: list, filter_type: str, filter_value, page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
+    """Filtr (davlat/til/yil) natijalari - filtrni saqlaydigan pagination.
+
+    Pagination tugmasi 'filter_page:{type}:{value}:{page}' yuboradi, shunda keyingi
+    sahifa ham xuddi shu filtr bo'yicha chiqadi (aks holda barcha kinolar chiqib ketardi).
+    """
+    builder = InlineKeyboardBuilder()
+
+    for movie in movies:
+        prefix = "💎 " if movie.is_premium else "🎬 "
+        builder.row(InlineKeyboardButton(
+            text=f"{prefix}{movie.display_title} [{movie.code}]",
+            callback_data=f"movie:{movie.code}"
+        ))
+
+    if total_pages > 1:
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(InlineKeyboardButton(
+                text="◀️ Oldingi",
+                callback_data=f"filter_page:{filter_type}:{filter_value}:{page - 1}"
+            ))
+        nav_buttons.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav_buttons.append(InlineKeyboardButton(
+                text="Keyingi ▶️",
+                callback_data=f"filter_page:{filter_type}:{filter_value}:{page + 1}"
+            ))
+        builder.row(*nav_buttons)
+
+    builder.row(InlineKeyboardButton(text="🔙 Orqaga", callback_data="search"))
+    builder.row(InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="back_to_menu"))
+
+    return builder.as_markup()
+
+
 def tariffs_kb(tariffs: list, with_discount: bool = False) -> InlineKeyboardMarkup:
     """Tariflar - chiroyli"""
     builder = InlineKeyboardBuilder()

@@ -74,6 +74,10 @@ async def on_startup():
     asyncio.create_task(start_scheduler(bot, check_interval=3600))  # Har 1 soatda tekshirish
     logger.info("Premium scheduler ishga tushdi!")
 
+    # Jarayonlararo cache invalidation listener (Redis pub/sub). Redis yo'q bo'lsa no-op.
+    from bot.utils.cache_listener import run_invalidation_listener
+    asyncio.create_task(run_invalidation_listener())
+
 
 async def on_shutdown():
     """Bot to'xtaganda"""

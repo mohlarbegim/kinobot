@@ -48,7 +48,8 @@ class DatabaseMiddleware(BaseMiddleware):
             # /start va /help har doim ishlashi kerak (bot o'chirilgan bo'lsa ham)
             is_allowed = False
             if isinstance(event, Message) and event.text:
-                cmd = event.text.split()[0]
+                parts = event.text.split()
+                cmd = parts[0] if parts else ''
                 is_allowed = cmd in self.ALWAYS_ALLOWED_COMMANDS
             elif isinstance(event, CallbackQuery) and event.data:
                 is_allowed = event.data in self.ALWAYS_ALLOWED_CALLBACKS

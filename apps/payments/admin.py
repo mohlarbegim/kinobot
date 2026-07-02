@@ -61,26 +61,41 @@ class PaymentAdmin(admin.ModelAdmin):
     @admin.action(description='Tasdiqlash')
     def approve_payments(self, request, queryset):
         from apps.users.models import User
+        from django.db import transaction
         admin_user = User.objects.filter(user_id=request.user.id).first()
 
-        for payment in queryset.filter(status='pending'):
-            payment.status = 'approved'
-            payment.approved_by = admin_user
-            payment.approved_at = timezone.now()
-            payment.save()
+        approved = 0
+        skipped = 0
+        for payment in queryset.filter(status='pending').select_related('tariff', 'user'):
+            # Tarif o'chirilgan bo'lsa (SET_NULL) kunlar sonini bilib bo'lmaydi -> o'tkazamiz
+            if payment.tariff is None:
+                skipped += 1
+                continue
 
-            # Premium berish
-            user = payment.user
-            user.is_premium = True
-            if user.premium_expires and user.premium_expires > timezone.now():
-                user.premium_expires += timezone.timedelta(days=payment.tariff.days)
-            else:
-                user.premium_expires = timezone.now() + timezone.timedelta(days=payment.tariff.days)
-            user.save()
+            # Har bir to'lovni alohida atomik tranzaksiyada - biri xato bersa
+            # boshqalari ta'sirlanmaydi (qisman/yarim tasdiqlash bo'lmaydi).
+            with transaction.atomic():
+                payment.status = 'approved'
+                payment.approved_by = admin_user
+                payment.approved_at = timezone.now()
+                payment.save(update_fields=['status', 'approved_by', 'approved_at'])
 
-        self.message_user(request, f'{queryset.count()} to\'lov tasdiqlandi.')
+                user = payment.user
+                user.is_premium = True
+                user.premium_expiry_notified = False
+                if user.premium_expires and user.premium_expires > timezone.now():
+                    user.premium_expires += timezone.timedelta(days=payment.tariff.days)
+                else:
+                    user.premium_expires = timezone.now() + timezone.timedelta(days=payment.tariff.days)
+                user.save(update_fields=['is_premium', 'premium_expires', 'premium_expiry_notified'])
+            approved += 1
+
+        msg = f'{approved} ta to\'lov tasdiqlandi.'
+        if skipped:
+            msg += f' {skipped} ta o\'tkazib yuborildi (tarif o\'chirilgan).'
+        self.message_user(request, msg)
 
     @admin.action(description='Rad etish')
     def reject_payments(self, request, queryset):
-        queryset.filter(status='pending').update(status='rejected')
-        self.message_user(request, f'{queryset.count()} to\'lov rad etildi.')
+        updated = queryset.filter(status='pending').update(status='rejected')
+        self.message_user(request, f'{updated} ta to\'lov rad etildi.')

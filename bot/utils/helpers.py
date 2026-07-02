@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Optional
+from html import escape as _html_escape
 import asyncio
 import logging
 
@@ -9,6 +10,18 @@ from asgiref.sync import sync_to_async
 from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 
 logger = logging.getLogger(__name__)
+
+
+def esc(value) -> str:
+    """HTML parse_mode uchun xavfsiz matn.
+
+    Foydalanuvchi/admin kiritgan matnni (ism, kino nomi, tavsif) HTML xabarga
+    joylashdan oldin '&', '<', '>' belgilarini escape qiladi. Aks holda ism ichida
+    '&' yoki '<' bo'lsa Telegram "can't parse entities" xatosini beradi.
+    """
+    if value is None:
+        return ""
+    return _html_escape(str(value), quote=False)
 
 
 @sync_to_async
@@ -69,7 +82,10 @@ def get_user(user_id: int) -> Optional[User]:
 @sync_to_async
 def update_user_activity(user_id: int):
     """Foydalanuvchi faolligini yangilash"""
-    User.objects.filter(user_id=user_id).update(last_active=datetime.now())
+    from django.utils import timezone
+    # USE_TZ=True bo'lgani uchun timezone-aware vaqt ishlatamiz (datetime.now() naive
+    # bo'lib, last_active ni noto'g'ri (offset bilan) saqlagan bo'lardi).
+    User.objects.filter(user_id=user_id).update(last_active=timezone.now())
 
 
 @sync_to_async
@@ -80,10 +96,12 @@ def get_active_channels():
 
 @sync_to_async
 def get_checkable_channels():
-    """Tekshirish mumkin bo'lgan kanallarni olish"""
+    """Tekshirish mumkin bo'lgan kanallarni olish (Channel.is_checkable bilan bir xil mezon)."""
     return list(Channel.objects.filter(
-        is_active=True
-    ).exclude(channel_type='external').exclude(channel_id__isnull=True).order_by('order'))
+        is_active=True,
+        channel_type__in=Channel.CHECKABLE_TYPES,
+        channel_id__isnull=False,
+    ).order_by('order'))
 
 
 def format_number(num: int) -> str:
@@ -139,16 +157,20 @@ def get_channel_subscription_count(channel_pk: int) -> int:
     return ChannelSubscription.objects.filter(channel_id=channel_pk).count()
 
 
-async def safe_execute(coro, max_retries: int = 3, delay: float = 1.0):
+async def safe_execute(coro_factory, max_retries: int = 3, delay: float = 1.0):
     """
     Tarmoq xatolarida qayta urinish bilan xavfsiz bajarish.
 
+    MUHIM: coroutine obyektini emas, uni YARATADIGAN callable (factory) uzatiladi.
+    Coroutine faqat bir marta await qilinadi, shuning uchun har urinishда yangi
+    coroutine yaratilishi kerak (aks holda "cannot reuse already awaited coroutine").
+
     Foydalanish:
-        await safe_execute(message.answer("Salom!"))
-        await safe_execute(callback.message.edit_text("Yangi matn"))
+        await safe_execute(lambda: message.answer("Salom!"))
+        await safe_execute(lambda: callback.message.edit_text("Yangi matn"))
 
     Args:
-        coro: Async coroutine (masalan, message.answer(...))
+        coro_factory: Har chaqirilganda yangi coroutine qaytaradigan callable
         max_retries: Maksimal urinishlar soni (default: 3)
         delay: Urinishlar orasidagi kutish (soniyalarda)
 
@@ -159,7 +181,7 @@ async def safe_execute(coro, max_retries: int = 3, delay: float = 1.0):
 
     for attempt in range(max_retries):
         try:
-            return await coro
+            return await coro_factory()
         except TelegramRetryAfter as e:
             # Flood limit - belgilangan vaqt kutish
             logger.warning(f"Flood limit: {e.retry_after}s kutish (urinish {attempt + 1}/{max_retries})")

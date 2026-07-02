@@ -13,6 +13,8 @@ from apps.payments.models import Tariff, Payment, PendingPaymentSession
 from apps.core.models import BotSettings
 from bot.keyboards import tariffs_kb, main_menu_inline_kb, payment_confirm_kb, back_kb
 from bot.filters import CanManagePayments
+from bot.utils import esc
+from bot.middlewares.database import clear_user_cache
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +38,9 @@ async def tariff_select_callback(callback: CallbackQuery, db_user: User = None, 
         await callback.answer("❌ Tarif topilmadi.", show_alert=True)
         return
 
-    # Narxni hisoblash
-    if with_discount and tariff.discounted_price:
+    # Narxni hisoblash: chegirma faqat u haqiqatan ham asosiy narxdan KICHIK bo'lsa.
+    # (is not None -> 0 so'm giveaway ham to'g'ri ishlaydi; >= price -> chegirma emas)
+    if with_discount and tariff.discounted_price is not None and tariff.discounted_price < tariff.price:
         price = tariff.discounted_price
         discount_text = f"\n🎁 Chegirma: -{tariff.discount_percent}%"
     else:
@@ -46,11 +49,11 @@ async def tariff_select_callback(callback: CallbackQuery, db_user: User = None, 
 
     text = (
         f"💳 <b>To'lov ma'lumotlari:</b>\n\n"
-        f"📦 Tarif: <b>{tariff.name}</b>\n"
+        f"📦 Tarif: <b>{esc(tariff.name)}</b>\n"
         f"📅 Muddat: <b>{tariff.days} kun</b>\n"
         f"💰 Narx: <b>{price:,} so'm</b>{discount_text}\n\n"
-        f"💳 Karta: <code>{bot_settings.card_number}</code>\n"
-        f"👤 Egasi: <b>{bot_settings.card_holder}</b>\n\n"
+        f"💳 Karta: <code>{esc(bot_settings.card_number)}</code>\n"
+        f"👤 Egasi: <b>{esc(bot_settings.card_holder)}</b>\n\n"
         f"📸 <b>To'lovni amalga oshiring va screenshot yuboring.</b>\n\n"
         f"⚠️ Izoh: Chekda <code>{callback.from_user.id}</code> ni ko'rsating."
     )
@@ -74,11 +77,14 @@ async def tariff_select_callback(callback: CallbackQuery, db_user: User = None, 
 @router.message(F.photo)
 async def screenshot_handler(message: Message, db_user: User = None, bot: Bot = None):
     """Screenshot qabul qilish"""
-    # Pending payment tekshirish
-    pending = await get_pending_payment(message.from_user.id)
+    # Pending payment'ni ATOMIK "claim" qilamiz: o'qiladi va shu zahoti o'chiriladi.
+    # Media-group (albom) yuborilganda har bir rasm alohida update bo'lib keladi va
+    # parallel ishlaydi; faqat bitta handler sessiyani o'chira oladi, qolganlari None
+    # oladi -> bitta to'lovga bitta Payment (takror to'lovlarning oldi olinadi).
+    pending = await claim_pending_payment(message.from_user.id)
 
     if not pending:
-        # Oddiy rasm - e'tibor bermaslik
+        # Oddiy rasm yoki allaqachon claim qilingan - e'tibor bermaslik
         return
 
     tariff = await get_tariff(pending['tariff_id'])
@@ -98,9 +104,6 @@ async def screenshot_handler(message: Message, db_user: User = None, bot: Bot = 
         screenshot_file_id=photo.file_id
     )
 
-    # Pending o'chirish
-    await delete_pending_payment(message.from_user.id)
-
     # User ga xabar
     await message.answer(
         "✅ <b>Chek qabul qilindi!</b>\n\n"
@@ -112,9 +115,9 @@ async def screenshot_handler(message: Message, db_user: User = None, bot: Bot = 
     # Adminga xabar
     admin_text = (
         f"💳 <b>Yangi to'lov!</b>\n\n"
-        f"👤 Foydalanuvchi: {db_user.full_name}\n"
+        f"👤 Foydalanuvchi: {esc(db_user.full_name)}\n"
         f"🆔 ID: <code>{db_user.user_id}</code>\n"
-        f"📦 Tarif: {tariff.name} ({tariff.days} kun)\n"
+        f"📦 Tarif: {esc(tariff.name)} ({tariff.days} kun)\n"
         f"💰 Summa: {pending['amount']:,} so'm\n"
         f"🎁 Chegirma: {'Ha' if pending['with_discount'] else 'Yoq'}\n"
     )
@@ -148,21 +151,24 @@ async def approve_payment_callback(callback: CallbackQuery, bot: Bot):
     """To'lovni tasdiqlash"""
     payment_id = int(callback.data.split(":")[1])
 
-    payment = await get_payment(payment_id)
-
-    if not payment:
-        await callback.answer("❌ To'lov topilmadi.", show_alert=True)
-        return
-
-    if payment.status != 'pending':
-        await callback.answer("⚠️ Bu to'lov allaqachon ko'rib chiqilgan.", show_alert=True)
-        return
-
-    # Admin xabarlarini olish (o'chirish uchun)
+    # Admin xabarlarini olish (o'chirish uchun) - tasdiqlashdan oldin
     admin_messages = await get_admin_messages(payment_id)
 
-    # Tasdiqlash
-    await approve_payment(payment_id, callback.from_user.id)
+    # Tasdiqlash (atomik: status transaksiya ichida qayta tekshiriladi -> ikki
+    # marta tasdiqlash / double-credit poygasi oldi olinadi)
+    result = await approve_payment(payment_id, callback.from_user.id)
+
+    if result['result'] == 'not_found':
+        await callback.answer("❌ To'lov topilmadi.", show_alert=True)
+        return
+    if result['result'] == 'already':
+        await callback.answer("⚠️ Bu to'lov allaqachon ko'rib chiqilgan.", show_alert=True)
+        return
+    if result['result'] == 'no_tariff':
+        await callback.answer(
+            "❌ Tarif topilmadi (o'chirilgan). To'lov tasdiqlanmadi.", show_alert=True
+        )
+        return
 
     await callback.answer("✅ To'lov tasdiqlandi!")
 
@@ -185,22 +191,19 @@ async def approve_payment_callback(callback: CallbackQuery, bot: Bot):
                 except TelegramBadRequest as e:
                     logger.debug(f"Admin xabarini o'chirishda xatolik: {e}")
 
-    # User ga xabar
-    user = await get_user_by_pk(payment.user_id)
-    tariff = await get_tariff(payment.tariff_id)
-
+    # User ga xabar (approve_payment natijasidan - qo'shimcha so'rovsiz)
     try:
         await bot.send_message(
-            chat_id=user.user_id,
+            chat_id=result['user_telegram_id'],
             text=(
                 f"🎉 <b>Premium aktivlashtirildi!</b>\n\n"
-                f"📦 Tarif: {tariff.name}\n"
-                f"📅 Muddat: {tariff.days} kun\n\n"
+                f"📦 Tarif: {esc(result['tariff_name'])}\n"
+                f"📅 Muddat: {result['tariff_days']} kun\n\n"
                 f"Botdan foydalaning! 🎬"
             )
         )
     except TelegramBadRequest as e:
-        logger.warning(f"Userga premium xabari yuborilmadi (user_id={user.user_id}): {e}")
+        logger.warning(f"Userga premium xabari yuborilmadi (user_id={result['user_telegram_id']}): {e}")
 
 
 # ==================== TO'LOVNI RAD ETISH ====================
@@ -210,21 +213,19 @@ async def reject_payment_callback(callback: CallbackQuery, bot: Bot):
     """To'lovni rad etish"""
     payment_id = int(callback.data.split(":")[1])
 
-    payment = await get_payment(payment_id)
-
-    if not payment:
-        await callback.answer("❌ To'lov topilmadi.", show_alert=True)
-        return
-
-    if payment.status != 'pending':
-        await callback.answer("⚠️ Bu to'lov allaqachon ko'rib chiqilgan.", show_alert=True)
-        return
-
-    # Admin xabarlarini olish (o'chirish uchun)
+    # Admin xabarlarini olish (o'chirish uchun) - rad etishdan oldin
     admin_messages = await get_admin_messages(payment_id)
 
-    # Rad etish
-    await reject_payment(payment_id)
+    # Rad etish (atomik: faqat 'pending' bo'lsa; tasdiqlangan to'lovni bosib
+    # ketmaydi -> approve/reject poygasi oldi olinadi)
+    result = await reject_payment(payment_id)
+
+    if result['result'] == 'not_found':
+        await callback.answer("❌ To'lov topilmadi.", show_alert=True)
+        return
+    if result['result'] == 'already':
+        await callback.answer("⚠️ Bu to'lov allaqachon ko'rib chiqilgan.", show_alert=True)
+        return
 
     await callback.answer("❌ To'lov rad etildi!")
 
@@ -247,19 +248,17 @@ async def reject_payment_callback(callback: CallbackQuery, bot: Bot):
                 except TelegramBadRequest as e:
                     logger.debug(f"Admin xabarini o'chirishda xatolik: {e}")
 
-    # User ga xabar
-    user = await get_user_by_pk(payment.user_id)
-
+    # User ga xabar (reject_payment natijasidan)
     try:
         await bot.send_message(
-            chat_id=user.user_id,
+            chat_id=result['user_telegram_id'],
             text=(
                 "❌ <b>To'lov rad etildi!</b>\n\n"
                 "Iltimos, to'g'ri chek yuboring yoki admin bilan bog'laning."
             )
         )
     except TelegramBadRequest as e:
-        logger.warning(f"Userga rad xabari yuborilmadi (user_id={user.user_id}): {e}")
+        logger.warning(f"Userga rad xabari yuborilmadi (user_id={result['user_telegram_id']}): {e}")
 
 
 # ==================== HELPER FUNCTIONS ====================
@@ -286,14 +285,6 @@ def create_payment(user_id: int, tariff_id: int, amount: int, is_discounted: boo
 
 
 @sync_to_async
-def get_payment(payment_id: int):
-    try:
-        return Payment.objects.get(id=payment_id)
-    except Payment.DoesNotExist:
-        return None
-
-
-@sync_to_async
 def save_admin_messages(payment_id: int, admin_messages: dict):
     """Admin xabar ID larni saqlash"""
     try:
@@ -313,44 +304,94 @@ def get_admin_messages(payment_id: int) -> dict:
 
 
 @sync_to_async
-def approve_payment(payment_id: int, admin_user_id: int):
-    payment = Payment.objects.get(id=payment_id)
-    payment.status = 'approved'
-    payment.approved_at = timezone.now()
+def approve_payment(payment_id: int, admin_user_id: int) -> dict:
+    """To'lovni ATOMIK tasdiqlash.
 
-    # Admin user olish
-    try:
-        admin_user = User.objects.get(user_id=admin_user_id)
-        payment.approved_by = admin_user
-    except User.DoesNotExist:
-        pass
+    Status transaksiya ichida qayta tekshiriladi, Payment/User qatorlari
+    select_for_update bilan qulflanadi -> bir to'lov ikki marta tasdiqlanmaydi
+    (double premium-credit poygasining oldi olinadi). Tarif o'chirilgan bo'lsa
+    'no_tariff' qaytaradi va hech narsani o'zgartirmaydi (to'lov 'pending' qoladi).
+    """
+    from django.db import transaction
 
-    payment.save()
+    with transaction.atomic():
+        try:
+            payment = (
+                Payment.objects.select_for_update()
+                .select_related('tariff', 'user')
+                .get(id=payment_id)
+            )
+        except Payment.DoesNotExist:
+            return {'result': 'not_found'}
 
-    # Premium berish
-    user = payment.user
-    user.is_premium = True
+        if payment.status != 'pending':
+            return {'result': 'already'}
 
-    if user.premium_expires and user.premium_expires > timezone.now():
-        user.premium_expires += timedelta(days=payment.tariff.days)
-    else:
-        user.premium_expires = timezone.now() + timedelta(days=payment.tariff.days)
+        if payment.tariff is None:
+            # Tarif o'chirilgan - kunlar sonini bilib bo'lmaydi, tasdiqlamaymiz.
+            return {'result': 'no_tariff'}
 
-    user.save()
+        days = payment.tariff.days
+        tariff_name = payment.tariff.name
+
+        payment.status = 'approved'
+        payment.approved_at = timezone.now()
+        try:
+            payment.approved_by = User.objects.get(user_id=admin_user_id)
+        except User.DoesNotExist:
+            pass
+        payment.save(update_fields=['status', 'approved_at', 'approved_by'])
+
+        # Premium berish (user qatorini ham qulflaymiz)
+        user = User.objects.select_for_update().get(pk=payment.user_id)
+        user.is_premium = True
+        # Yangi premium davri -> tugash eslatmasi bayrog'ini tozalaymiz
+        user.premium_expiry_notified = False
+        if user.premium_expires and user.premium_expires > timezone.now():
+            user.premium_expires += timedelta(days=days)
+        else:
+            user.premium_expires = timezone.now() + timedelta(days=days)
+        user.save(update_fields=['is_premium', 'premium_expires', 'premium_expiry_notified'])
+
+        user_telegram_id = user.user_id
+
+    # Cache'ni tozalaymiz, aks holda user 60s davomida premium sifatida ko'rinmaydi.
+    clear_user_cache(user_telegram_id)
+
+    return {
+        'result': 'ok',
+        'user_telegram_id': user_telegram_id,
+        'tariff_name': tariff_name,
+        'tariff_days': days,
+    }
 
 
 @sync_to_async
-def reject_payment(payment_id: int):
-    Payment.objects.filter(id=payment_id).update(status='rejected')
+def reject_payment(payment_id: int) -> dict:
+    """To'lovni ATOMIK rad etish - faqat 'pending' bo'lsa.
 
+    Tasdiqlangan to'lovni bosib ketmaydi (approve/reject poygasining oldi olinadi).
+    """
+    from django.db import transaction
 
-@sync_to_async
-def get_user_by_pk(pk: int):
-    """User ni Django PK bo'yicha olish (payment.user_id uchun)"""
-    try:
-        return User.objects.get(pk=pk)
-    except User.DoesNotExist:
-        return None
+    with transaction.atomic():
+        try:
+            payment = (
+                Payment.objects.select_for_update()
+                .select_related('user')
+                .get(id=payment_id)
+            )
+        except Payment.DoesNotExist:
+            return {'result': 'not_found'}
+
+        if payment.status != 'pending':
+            return {'result': 'already'}
+
+        payment.status = 'rejected'
+        payment.save(update_fields=['status'])
+        user_telegram_id = payment.user.user_id
+
+    return {'result': 'ok', 'user_telegram_id': user_telegram_id}
 
 
 @sync_to_async
@@ -379,43 +420,39 @@ def save_pending_payment(user_id: int, tariff_id: int, amount: int, with_discoun
 
 
 @sync_to_async
-def get_pending_payment(user_id: int):
-    """Pending to'lovni database dan olish"""
-    # Eski sessiyalarni tozalash
+def claim_pending_payment(user_id: int):
+    """Pending to'lovni ATOMIK olish: o'qib, shu zahoti o'chiradi.
+
+    Bir foydalanuvchidan bir vaqtda bir nechta rasm (media-group / albom) kelganda
+    faqat BITTA handler sessiyani muvaffaqiyatli o'chira oladi -> bittasi ma'lumot
+    oladi, qolganlari None. Bu takroriy Payment yozuvlarining oldini oladi.
+    """
     PendingPaymentSession.cleanup_expired()
 
     try:
         user = User.objects.get(user_id=user_id)
-        session = PendingPaymentSession.objects.filter(user=user).first()
-
-        if session and not session.is_expired:
-            return {
-                'tariff_id': session.tariff_id,
-                'amount': session.amount,
-                'with_discount': session.is_discounted,
-                'timestamp': session.created_at
-            }
-        elif session:
-            # Muddati tugagan - o'chirish
-            session.delete()
     except User.DoesNotExist:
-        pass
+        return None
 
-    return None
+    session = PendingPaymentSession.objects.filter(user=user).order_by('-created_at').first()
+    if not session:
+        return None
 
+    data = {
+        'tariff_id': session.tariff_id,
+        'amount': session.amount,
+        'with_discount': session.is_discounted,
+        'timestamp': session.created_at,
+    }
+    expired = session.is_expired
 
-@sync_to_async
-def delete_pending_payment(user_id: int):
-    """Pending to'lovni database dan o'chirish"""
-    try:
-        user = User.objects.get(user_id=user_id)
-        PendingPaymentSession.objects.filter(user=user).delete()
-    except User.DoesNotExist:
-        pass
+    # Atomik claim: qatorni pk bo'yicha o'chiramiz. delete() o'chirilgan qatorlar
+    # sonini qaytaradi; parallel handlerlardan faqat bittasi 1 oladi, qolganlari 0.
+    deleted, _ = PendingPaymentSession.objects.filter(pk=session.pk).delete()
+    if not deleted:
+        return None  # boshqa parallel handler allaqachon oldi
 
+    if expired:
+        return None
 
-@sync_to_async
-def get_pending_payments_count() -> int:
-    """Pending to'lovlar sonini olish"""
-    PendingPaymentSession.cleanup_expired()
-    return PendingPaymentSession.objects.count()
+    return data

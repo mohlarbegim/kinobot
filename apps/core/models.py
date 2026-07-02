@@ -47,6 +47,9 @@ class BotSettings(models.Model):
         self.pk = 1
         super().save(*args, **kwargs)
         cache.delete('bot_settings')
+        # Bot jarayonining in-process settings cache'ini ham tozalatamiz (Redis pub/sub)
+        from apps.core.cache_bus import publish_invalidation
+        publish_invalidation('settings')
 
     @classmethod
     def get_settings(cls):

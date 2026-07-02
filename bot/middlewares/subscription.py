@@ -1,3 +1,4 @@
+import logging
 from typing import Callable, Dict, Any, Awaitable
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import TelegramObject, Message, CallbackQuery
@@ -5,6 +6,8 @@ from aiogram.exceptions import TelegramBadRequest
 from asgiref.sync import sync_to_async
 from cachetools import TTLCache
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 # Cache for channels and user subscriptions
 _channels_cache = TTLCache(maxsize=1, ttl=300)
@@ -29,9 +32,7 @@ class SubscriptionMiddleware(BaseMiddleware):
 
         # Get user_id
         user_id = None
-        if isinstance(event, Message):
-            user_id = event.from_user.id
-        elif isinstance(event, CallbackQuery):
+        if isinstance(event, (Message, CallbackQuery)) and event.from_user:
             user_id = event.from_user.id
 
         # Admin users skip subscription check
@@ -44,10 +45,11 @@ class SubscriptionMiddleware(BaseMiddleware):
 
         # Skip commands/callbacks
         if isinstance(event, Message):
-            if event.text and event.text.split()[0] in self.SKIP_COMMANDS:
+            parts = event.text.split() if event.text else []
+            if parts and parts[0] in self.SKIP_COMMANDS:
                 return await handler(event, data)
         elif isinstance(event, CallbackQuery):
-            if event.data in self.SKIP_CALLBACKS or event.data.startswith('admin:'):
+            if event.data and (event.data in self.SKIP_CALLBACKS or event.data.startswith('admin:')):
                 return await handler(event, data)
 
         if user_id:
@@ -71,7 +73,9 @@ class SubscriptionMiddleware(BaseMiddleware):
                 if isinstance(event, Message):
                     await event.answer(text, reply_markup=channels_kb(not_subscribed))
                 elif isinstance(event, CallbackQuery):
-                    await event.message.answer(text, reply_markup=channels_kb(not_subscribed))
+                    # event.message eski/kirib bo'lmaydigan xabar bo'lsa None bo'lishi mumkin
+                    if event.message:
+                        await event.message.answer(text, reply_markup=channels_kb(not_subscribed))
                     await event.answer()
                 return
 
@@ -90,8 +94,10 @@ class SubscriptionMiddleware(BaseMiddleware):
                 member = await bot.get_chat_member(channel.channel_id, user_id)
                 if member.status in ['left', 'kicked']:
                     not_subscribed.append(channel)
-            except TelegramBadRequest:
-                pass
+            except TelegramBadRequest as e:
+                # Bot kanalni tekshira olmadi (admin emas / topilmadi) -> fail-open (o'tkazamiz),
+                # lekin admin sozlamani tuzatishi uchun warning log yozamiz.
+                logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
 
         return not_subscribed
 

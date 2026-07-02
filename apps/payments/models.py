@@ -24,7 +24,8 @@ class Tariff(models.Model):
     @property
     def discount_percent(self):
         """Chegirma foizi"""
-        if self.discounted_price and self.discounted_price < self.price:
+        # is not None -> discounted_price=0 (100% chegirma) ham to'g'ri hisoblanadi.
+        if self.discounted_price is not None and self.price and self.discounted_price < self.price:
             return int((1 - self.discounted_price / self.price) * 100)
         return 0
 

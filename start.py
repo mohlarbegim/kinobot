@@ -51,6 +51,10 @@ def check_environment():
     print(f"  DATABASE_URL: {'configured (PostgreSQL)' if db_url else 'using SQLite'}")
     print(f"  PORT: {PORT}")
 
+    # BOT_TOKEN yo'q bo'lsa bot baribir ishga tushmaydi (Bot(token='') xato beradi).
+    # "Web sog'lom, bot o'lik" holatiga tushmaslik uchun shu yerda to'xtaymiz.
+    return not missing
+
 
 def check_database_connection():
     """Check database connection before starting"""
@@ -130,7 +134,10 @@ if __name__ == '__main__':
     print("=" * 50)
 
     # Check environment
-    check_environment()
+    env_ok = check_environment()
+    if not env_ok:
+        print("FATAL: BOT_TOKEN o'rnatilmagan - bot ishga tusha olmaydi. To'xtatildi.")
+        sys.exit(1)
 
     # Check database connection
     db_ok = check_database_connection()
@@ -178,9 +185,25 @@ if __name__ == '__main__':
     print("All services started!")
     print("=" * 50)
 
-    # Wait for gunicorn (main process)
-    gunicorn_process.wait()
+    # Ikkala jarayonni ham kuzatamiz. Biri o'lsa (masalan bot polling xatosi bilan
+    # tugasa), ikkinchisini to'xtatib, xato kodi bilan chiqamiz -> Railway qayta ishga
+    # tushiradi. Aks holda bot o'lsa ham gunicorn /health/ ga javob berib "healthy"
+    # qolardi va bot jimgina o'lik bo'lardi.
+    exit_code = 0
+    while True:
+        if gunicorn_process.poll() is not None:
+            print(f"Gunicorn to'xtadi (code={gunicorn_process.returncode}). Bot ham to'xtatilmoqda...")
+            exit_code = gunicorn_process.returncode or 1
+            break
+        if bot_process.poll() is not None:
+            print(f"Bot jarayoni to'xtadi (code={bot_process.returncode}). Gunicorn ham to'xtatilmoqda...")
+            exit_code = bot_process.returncode or 1
+            break
+        time.sleep(5)
 
-    # Cleanup bot if gunicorn exits
-    if bot_process:
+    if bot_process and bot_process.poll() is None:
         bot_process.terminate()
+    if gunicorn_process and gunicorn_process.poll() is None:
+        gunicorn_process.terminate()
+
+    sys.exit(exit_code)

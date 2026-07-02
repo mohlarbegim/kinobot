@@ -2,6 +2,7 @@ from aiogram import Router, F, Bot
 from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from django.db.models import Count, Sum, Max
@@ -19,7 +20,8 @@ from bot.keyboards import (
     main_menu_inline_kb, back_kb, admin_messages_kb
 )
 from apps.channels.models import Channel
-from bot.utils import format_number
+from bot.utils import format_number, esc
+from bot.middlewares.database import clear_user_cache
 
 router = Router()
 
@@ -226,7 +228,7 @@ async def admin_movie_view(callback: CallbackQuery):
     country_text = movie.get_country_display() if hasattr(movie, 'get_country_display') else "Yo'q"
 
     text = (
-        f"🎬 <b>{movie.display_title}</b>\n\n"
+        f"🎬 <b>{esc(movie.display_title)}</b>\n\n"
         f"📝 Kod: <code>{movie.code}</code>\n"
         f"🎭 Janr: {category_name}\n"
         f"📅 Yil: {year_text}\n"
@@ -776,9 +778,9 @@ async def add_movie_confirm(callback: CallbackQuery, state: FSMContext, db_user:
 
     await callback.message.edit_text(
         f"✅ <b>Kino muvaffaqiyatli qo'shildi!</b>\n\n"
-        f"📝 Kod: <code>{movie.code}</code>\n"
-        f"🎬 Nom: {movie.title}\n"
-        f"🎭 Janr: {category_name}\n"
+        f"📝 Kod: <code>{esc(movie.code)}</code>\n"
+        f"🎬 Nom: {esc(movie.title)}\n"
+        f"🎭 Janr: {esc(category_name)}\n"
         f"📅 Yil: {movie.year or 'Yo`q'}\n"
         f"🌍 Davlat: {movie.get_country_display()}\n"
         f"📺 Sifat: {movie.get_quality_display()}\n"
@@ -990,7 +992,7 @@ async def view_category(callback: CallbackQuery):
 
     await callback.message.edit_text(
         f"🎭 <b>Janr ma'lumotlari</b>\n\n"
-        f"📝 Nomi: {emoji} {category.name}\n"
+        f"📝 Nomi: {emoji} {esc(category.name)}\n"
         f"📊 Holati: {status}\n"
         f"🎬 Kinolar: {movies_count} ta\n"
         f"🔢 Tartib: {category.order}",
@@ -1034,7 +1036,7 @@ async def edit_category_start(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text(
         f"✏️ <b>Janrni tahrirlash</b>\n\n"
-        f"Hozirgi nom: <b>{category.name}</b>\n\n"
+        f"Hozirgi nom: <b>{esc(category.name)}</b>\n\n"
         "Yangi nomni kiriting yoki o'zgarishsiz qoldiring:",
         reply_markup=kb
     )
@@ -1179,7 +1181,7 @@ async def delete_category_confirm(callback: CallbackQuery):
 
     await callback.message.edit_text(
         f"🗑 <b>Janrni o'chirish</b>\n\n"
-        f"Rostdan ham <b>{category.name}</b> janrini o'chirmoqchimisiz?{warning}",
+        f"Rostdan ham <b>{esc(category.name)}</b> janrini o'chirmoqchimisiz?{warning}",
         reply_markup=kb
     )
     await callback.answer()
@@ -1329,16 +1331,27 @@ async def broadcast_confirm(callback: CallbackQuery, state: FSMContext, db_user:
     sent = 0
     failed = 0
 
+    async def _deliver(user_id, parse_mode="__default__"):
+        # parse_mode="__default__" -> botning standart HTML rejimidan foydalanish.
+        # parse_mode=None -> HTML tahlilini o'chirish (oddiy matn).
+        kwargs = {} if parse_mode == "__default__" else {'parse_mode': parse_mode}
+        if data['content_type'] == 'text':
+            await bot.send_message(user_id, data['text'], **kwargs)
+        elif data['content_type'] == 'photo':
+            await bot.send_photo(user_id, data['file_id'], caption=data['text'], **kwargs)
+        elif data['content_type'] == 'video':
+            await bot.send_video(user_id, data['file_id'], caption=data['text'], **kwargs)
+        elif data['content_type'] == 'document':
+            await bot.send_document(user_id, data['file_id'], caption=data['text'], **kwargs)
+
     for user in users:
         try:
-            if data['content_type'] == 'text':
-                await bot.send_message(user.user_id, data['text'])
-            elif data['content_type'] == 'photo':
-                await bot.send_photo(user.user_id, data['file_id'], caption=data['text'])
-            elif data['content_type'] == 'video':
-                await bot.send_video(user.user_id, data['file_id'], caption=data['text'])
-            elif data['content_type'] == 'document':
-                await bot.send_document(user.user_id, data['file_id'], caption=data['text'])
+            try:
+                await _deliver(user.user_id)
+            except TelegramBadRequest:
+                # HTML tahlili muvaffaqiyatsiz (masalan matnda '&' yoki yopilmagan teg) ->
+                # oddiy matn sifatida qayta yuborish, shunda xabar baribir yetib boradi.
+                await _deliver(user.user_id, parse_mode=None)
             sent += 1
         except Exception:
             failed += 1
@@ -1757,10 +1770,10 @@ async def view_channel(callback: CallbackQuery):
     type_text = type_names.get(channel.channel_type, channel.channel_type)
 
     text = (
-        f"📢 <b>{channel.title}</b>\n\n"
+        f"📢 <b>{esc(channel.title)}</b>\n\n"
         f"📋 Turi: {type_text}\n"
         f"🆔 ID: <code>{channel.channel_id or 'yo`q'}</code>\n"
-        f"👤 Username: @{channel.username or 'yo`q'}\n"
+        f"👤 Username: @{esc(channel.username or 'yo`q')}\n"
         f"🔗 Havola: {channel.invite_link}\n"
         f"📊 Holat: {status}\n"
         f"✅ Tekshirish: {checkable}\n\n"
@@ -1892,7 +1905,7 @@ async def users_list(callback: CallbackQuery):
     for user in users:
         status = "💎" if user.is_premium_active else ("🎁" if user.is_trial_active else "👤")
         banned = " ⛔️" if user.is_banned else ""
-        text += f"{status} <code>{user.user_id}</code> - {user.full_name[:20]}{banned}\n"
+        text += f"{status} <code>{user.user_id}</code> - {esc(user.full_name[:20])}{banned}\n"
 
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     builder = InlineKeyboardBuilder()
@@ -1939,13 +1952,13 @@ async def user_view(callback: CallbackQuery):
     text = (
         f"👤 <b>Foydalanuvchi ma'lumotlari</b>\n\n"
         f"🆔 ID: <code>{user.user_id}</code>\n"
-        f"👤 Ism: {user.full_name}\n"
-        f"📛 Username: @{user.username or 'yo`q'}\n"
+        f"👤 Ism: {esc(user.full_name)}\n"
+        f"📛 Username: @{esc(user.username or 'yo`q')}\n"
         f"📊 Status: {status}\n"
     )
 
     if user.is_premium_active:
-        text += f"⏰ Premium tugaydi: {user.premium_expires.strftime('%d.%m.%Y')}\n"
+        text += f"⏰ Premium tugaydi: {user.premium_expires.strftime('%d.%m.%Y') if user.premium_expires else 'Muddatsiz'}\n"
         text += f"📅 Qolgan kun: {user.days_left}\n"
 
     text += (
@@ -1953,7 +1966,7 @@ async def user_view(callback: CallbackQuery):
     )
 
     if user.is_banned and user.ban_reason:
-        text += f"📝 Sabab: {user.ban_reason}\n"
+        text += f"📝 Sabab: {esc(user.ban_reason)}\n"
 
     text += (
         f"\n🎬 Ko'rilgan kinolar: {user.movies_watched}\n"
@@ -2094,8 +2107,8 @@ async def users_search_handler(message: Message, state: FSMContext):
     text = (
         f"👤 <b>Foydalanuvchi topildi!</b>\n\n"
         f"🆔 ID: <code>{user.user_id}</code>\n"
-        f"👤 Ism: {user.full_name}\n"
-        f"📛 Username: @{user.username or 'yo`q'}\n"
+        f"👤 Ism: {esc(user.full_name)}\n"
+        f"📛 Username: @{esc(user.username or 'yo`q')}\n"
         f"📊 Status: {status}\n"
         f"⛔️ Bloklangan: {'Ha' if user.is_banned else 'Yo`q'}\n"
     )
@@ -2134,8 +2147,8 @@ async def user_info_cmd(message: Message):
     text = (
         f"👤 <b>Foydalanuvchi ma'lumotlari</b>\n\n"
         f"🆔 ID: <code>{user.user_id}</code>\n"
-        f"👤 Ism: {user.full_name}\n"
-        f"📛 Username: @{user.username or 'yo`q'}\n"
+        f"👤 Ism: {esc(user.full_name)}\n"
+        f"📛 Username: @{esc(user.username or 'yo`q')}\n"
         f"📊 Status: {status}\n"
         f"⛔️ Bloklangan: {banned}\n"
         f"🎬 Ko'rilgan kinolar: {user.movies_watched}\n"
@@ -2220,8 +2233,8 @@ async def settings_menu_callback(callback: CallbackQuery):
         f"├ Foiz: {settings.discount_percent}%\n"
         f"└ Muddat: {discount_time}\n\n"
         f"💳 <b>To'lov ma'lumotlari:</b>\n"
-        f"Karta: <code>{settings.card_number}</code>\n"
-        f"Egasi: {settings.card_holder}"
+        f"Karta: <code>{esc(settings.card_number)}</code>\n"
+        f"Egasi: {esc(settings.card_holder)}"
     )
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -2579,9 +2592,11 @@ def toggle_tariff_status(tariff_id: int):
 
 
 @router.callback_query(F.data == "admin:tariffs", IsSuperAdmin())
-async def tariffs_menu_callback(callback: CallbackQuery, state: FSMContext):
+async def tariffs_menu_callback(callback: CallbackQuery, state: FSMContext = None):
     """Tariflar menyusi"""
-    await state.clear()
+    # state ichki chaqiruvlarda None bo'lishi mumkin (masalan tarif o'chirilgandan keyin)
+    if state:
+        await state.clear()
     tariffs = await get_all_tariffs()
 
     if not tariffs:
@@ -2594,7 +2609,7 @@ async def tariffs_menu_callback(callback: CallbackQuery, state: FSMContext):
         text = "💎 <b>Tariflar</b>\n\n"
         for i, tariff in enumerate(tariffs, 1):
             status = "✅" if tariff.is_active else "❌"
-            text += f"{i}. {status} <b>{tariff.name}</b> - {tariff.days} kun - {tariff.price:,} so'm\n"
+            text += f"{i}. {status} <b>{esc(tariff.name)}</b> - {tariff.days} kun - {tariff.price:,} so'm\n"
         text += "\nTarifni tanlang yoki yangi qo'shing:"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[])
@@ -2630,7 +2645,7 @@ async def tariff_view_callback(callback: CallbackQuery):
 
     status = "✅ Aktiv" if tariff.is_active else "❌ Deaktiv"
     text = (
-        f"💎 <b>{tariff.name}</b>\n\n"
+        f"💎 <b>{esc(tariff.name)}</b>\n\n"
         f"📅 Muddat: {tariff.days} kun\n"
         f"💰 Narx: {tariff.price:,} so'm\n"
         f"📊 Holat: {status}\n"
@@ -2811,7 +2826,7 @@ async def tariff_edit_callback(callback: CallbackQuery, state: FSMContext):
     ])
 
     await callback.message.edit_text(
-        f"✏️ <b>{tariff.name} tarifini tahrirlash</b>\n\n"
+        f"✏️ <b>{esc(tariff.name)} tarifini tahrirlash</b>\n\n"
         f"📅 Muddat: {tariff.days} kun\n"
         f"💰 Narx: {tariff.price:,} so'm\n\n"
         "Nimani o'zgartirmoqchisiz?",
@@ -3144,18 +3159,8 @@ def ban_user(user_id: int, reason: str = None) -> bool:
         user.is_banned = True
         user.ban_reason = reason
         user.save(update_fields=['is_banned', 'ban_reason'])
-        return True
-    except User.DoesNotExist:
-        return False
-
-
-@sync_to_async
-def unban_user(user_id: int) -> bool:
-    try:
-        user = User.objects.get(user_id=user_id)
-        user.is_banned = False
-        user.ban_reason = None
-        user.save(update_fields=['is_banned', 'ban_reason'])
+        # Cache'ni tozalaymiz, aks holda ban 60s davomida kuchga kirmaydi.
+        clear_user_cache(user_id)
         return True
     except User.DoesNotExist:
         return False
@@ -3395,7 +3400,7 @@ async def edit_message_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(message_type=msg_type)
 
     text = (
-        f"✏️ <b>{template.title}</b>\n\n"
+        f"✏️ <b>{esc(template.title)}</b>\n\n"
         f"📝 <b>Hozirgi xabar:</b>\n"
         f"<code>{template.content}</code>\n\n"
     )
@@ -3426,6 +3431,11 @@ async def edit_message_content(message: Message, state: FSMContext):
         return
 
     new_content = message.text
+    if not new_content:
+        # Rasm/stiker/ovoz kabi matnsiz xabar -> template.content=None IntegrityError
+        # berardi yoki shablonni "None" ga aylantirardi. State'ni saqlab, qayta so'raymiz.
+        await message.answer("❌ Iltimos, xabar matnini (oddiy matn) yuboring.")
+        return
 
     @sync_to_async
     def update_message():
@@ -3909,7 +3919,11 @@ def give_user_premium(user_id: int, days: int) -> bool:
             user.is_premium = True
             user.premium_expires = timezone.now() + timedelta(days=days)
 
+        # Yangi davr -> tugash eslatmasi qayta yuborilishi mumkin
+        user.premium_expiry_notified = False
         user.save()
+        # Cache'ni tozalaymiz, aks holda premium 60s davomida ko'rinmaydi.
+        clear_user_cache(user_id)
         return True
     except User.DoesNotExist:
         return False
@@ -3923,6 +3937,7 @@ def unban_user(user_id: int) -> bool:
         user.is_banned = False
         user.ban_reason = None
         user.save()
+        clear_user_cache(user_id)
         return True
     except User.DoesNotExist:
         return False

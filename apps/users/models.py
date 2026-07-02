@@ -13,6 +13,8 @@ class User(models.Model):
     # Premium
     is_premium = models.BooleanField(default=False, verbose_name='Premium')
     premium_expires = models.DateTimeField(blank=True, null=True, verbose_name='Premium tugash vaqti')
+    # Tugash eslatmasi yuborilganmi (har soatlik spam bo'lmasligi uchun)
+    premium_expiry_notified = models.BooleanField(default=False, verbose_name='Tugash eslatmasi yuborilgan')
 
     # Trial
     free_trial_expires = models.DateTimeField(blank=True, null=True, verbose_name='Bepul muddat tugashi')
@@ -88,9 +90,13 @@ class User(models.Model):
     @property
     def is_premium_active(self):
         """Premium aktivmi"""
-        if self.is_premium and self.premium_expires:
-            return timezone.now() < self.premium_expires
-        return False
+        if not self.is_premium:
+            return False
+        # is_premium=True, lekin muddat ko'rsatilmagan (admin qo'lda "Premium" ni
+        # belgilagan) -> muddatsiz premium sifatida aktiv hisoblaymiz.
+        if self.premium_expires is None:
+            return True
+        return timezone.now() < self.premium_expires
 
     @property
     def can_watch_movies(self):
@@ -101,6 +107,8 @@ class User(models.Model):
     def days_left(self):
         """Necha kun qoldi"""
         if self.is_premium_active:
+            if self.premium_expires is None:
+                return 0  # muddatsiz premium - "qolgan kun" ma'noga ega emas
             delta = self.premium_expires - timezone.now()
             return max(0, delta.days)
         elif self.is_trial_active:

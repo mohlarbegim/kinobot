@@ -56,13 +56,22 @@ class UserAdmin(admin.ModelAdmin):
 
     @admin.action(description='Bloklash')
     def ban_users(self, request, queryset):
+        # .update() post_save signalini ishga tushirmaydi -> bot cache'ini o'zimiz tozalatamiz
+        from apps.core.cache_bus import publish_invalidation
+        user_ids = list(queryset.values_list('user_id', flat=True))
         queryset.update(is_banned=True)
-        self.message_user(request, f'{queryset.count()} foydalanuvchi bloklandi.')
+        for uid in user_ids:
+            publish_invalidation('user', id=uid)
+        self.message_user(request, f'{len(user_ids)} foydalanuvchi bloklandi.')
 
     @admin.action(description='Blokdan chiqarish')
     def unban_users(self, request, queryset):
+        from apps.core.cache_bus import publish_invalidation
+        user_ids = list(queryset.values_list('user_id', flat=True))
         queryset.update(is_banned=False, ban_reason='')
-        self.message_user(request, f'{queryset.count()} foydalanuvchi blokdan chiqarildi.')
+        for uid in user_ids:
+            publish_invalidation('user', id=uid)
+        self.message_user(request, f'{len(user_ids)} foydalanuvchi blokdan chiqarildi.')
 
 
 @admin.register(Admin)

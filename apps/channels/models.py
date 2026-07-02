@@ -33,12 +33,15 @@ class Channel(models.Model):
     def __str__(self):
         return self.title
 
+    # get_chat_member orqali obunani tekshirish mumkin bo'lgan turlar.
+    # telegram_bot / instagram / external -> tekshirib bo'lmaydi (majburiy qilib
+    # bo'lmaydi), shuning uchun ular checkable EMAS.
+    CHECKABLE_TYPES = ('telegram_channel', 'telegram_group')
+
     @property
     def is_checkable(self):
         """Obunani tekshirsa bo'ladimi"""
-        # Faqat Telegram kanal va guruhlar tekshiriladi
-        checkable_types = ['telegram_channel', 'telegram_group', 'public', 'private', 'group']
-        return self.channel_type in checkable_types and self.channel_id is not None
+        return self.channel_type in self.CHECKABLE_TYPES and self.channel_id is not None
 
     @property
     def subscribers_count(self):
