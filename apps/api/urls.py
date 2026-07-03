@@ -25,6 +25,9 @@ urlpatterns = [
     path('settings/', views.BotSettingsView.as_view(), name='api_settings'),
     path('stats/', views.StatsView.as_view(), name='api_stats'),
 
+    # Broadcast media yuklash (Telegram file_id oladi)
+    path('upload-media/', views.upload_media, name='api_upload_media'),
+
     # Router (CRUD + custom actions)
     path('', include(router.urls)),
 ]

@@ -62,6 +62,78 @@ def me(request):
     })
 
 
+@api_view(['POST'])
+@permission_classes([IsAdminUser])
+def upload_media(request):
+    """Media faylni Telegram'ga yuklab, broadcast uchun file_id qaytaradi.
+
+    Fayl birinchi adminга (ADMINS[0]) yuboriladi (file_id olish uchun) va darhol
+    o'chiriladi. web env'da BOT_TOKEN va ADMINS bo'lishi shart.
+    """
+    import requests
+    from django.conf import settings
+
+    f = request.FILES.get('file')
+    if not f:
+        return Response({'detail': 'Fayl yuborilmadi'}, status=status.HTTP_400_BAD_REQUEST)
+
+    token = settings.BOT_TOKEN
+    admins = settings.ADMINS
+    if not token or not admins:
+        return Response(
+            {'detail': "Media yuklash uchun BOT_TOKEN va ADMINS sozlanishi kerak (web xizmatida)."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if f.size > 45 * 1024 * 1024:
+        return Response({'detail': "Fayl juda katta (45MB dan kichik bo'lsin)"},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    ctype = (f.content_type or '').lower()
+    if ctype.startswith('image/'):
+        method, field, kind = 'sendPhoto', 'photo', 'photo'
+    elif ctype.startswith('video/'):
+        method, field, kind = 'sendVideo', 'video', 'video'
+    else:
+        method, field, kind = 'sendDocument', 'document', 'document'
+
+    chat_id = admins[0]
+    try:
+        resp = requests.post(
+            f'https://api.telegram.org/bot{token}/{method}',
+            data={'chat_id': chat_id, 'disable_notification': 'true'},
+            files={field: (f.name, f.read(), ctype or 'application/octet-stream')},
+            timeout=90,
+        )
+        data = resp.json()
+    except Exception as e:
+        return Response({'detail': f"Telegram bilan bog'lanishda xato: {e}"},
+                        status=status.HTTP_502_BAD_GATEWAY)
+
+    if not data.get('ok'):
+        return Response({'detail': f"Telegram xatosi: {data.get('description')}"},
+                        status=status.HTTP_502_BAD_GATEWAY)
+
+    result = data['result']
+    if kind == 'photo':
+        file_id = result['photo'][-1]['file_id']  # eng katta o'lcham
+    elif kind == 'video':
+        file_id = result['video']['file_id']
+    else:
+        file_id = result['document']['file_id']
+
+    # file_id olindi -> vaqtinchalik xabarni o'chiramiz (best-effort)
+    try:
+        requests.post(
+            f'https://api.telegram.org/bot{token}/deleteMessage',
+            data={'chat_id': chat_id, 'message_id': result['message_id']},
+            timeout=15,
+        )
+    except Exception:
+        pass
+
+    return Response({'file_id': file_id, 'content_type': kind, 'name': f.name})
+
+
 # ---------------------------------------------------------------------------
 # Users (Telegram foydalanuvchilari)
 # ---------------------------------------------------------------------------

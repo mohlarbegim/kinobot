@@ -21,6 +21,7 @@ redis>=5.0.0
 python-dotenv>=1.0.0
 cachetools>=5.3.0
 tenacity>=8.2.0
+requests>=2.31.0
 
 # Async
 asgiref>=3.7.0

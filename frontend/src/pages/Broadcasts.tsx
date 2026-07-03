@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import {
-  Table, Tag, Typography, Alert, Progress, Button, Modal, Form, Input, Select, Switch, App,
+  Table, Tag, Typography, Alert, Progress, Button, Modal, Form, Input, Select, Switch, App, Upload,
 } from 'antd'
-import { SendOutlined } from '@ant-design/icons'
+import { SendOutlined, UploadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -16,9 +16,9 @@ const TARGET_OPTIONS = [
 ]
 const CONTENT_OPTIONS = [
   { value: 'text', label: 'Matn' },
-  { value: 'photo', label: 'Rasm (file_id)' },
-  { value: 'video', label: 'Video (file_id)' },
-  { value: 'document', label: 'Fayl (file_id)' },
+  { value: 'photo', label: 'Rasm' },
+  { value: 'video', label: 'Video' },
+  { value: 'document', label: 'Fayl' },
 ]
 
 export default function Broadcasts() {
@@ -27,16 +27,35 @@ export default function Broadcasts() {
   const [page, setPage] = useState(1)
   const [open, setOpen] = useState(false)
   const [sending, setSending] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [form] = Form.useForm()
   const contentType = Form.useWatch('content_type', form)
 
   const { data, isLoading } = useQuery({
     queryKey: ['broadcasts', page],
     queryFn: async () => (await api.get('/broadcasts/', { params: { page } })).data,
-    // Jonli progress: tugallanmagan broadcast bo'lsa har 3s da yangilaymiz
     refetchInterval: (q: any) =>
       (q.state.data?.results ?? []).some((b: any) => !b.is_completed) ? 3000 : false,
   })
+
+  const handleUpload = async ({ file, onSuccess, onError }: any) => {
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const { data } = await api.post('/upload-media/', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      form.setFieldsValue({ file_id: data.file_id, content_type: data.content_type })
+      message.success('Fayl yuklandi — file_id avtomatik olindi')
+      onSuccess?.(data)
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || 'Fayl yuklashda xato')
+      onError?.(e)
+    } finally {
+      setUploading(false)
+    }
+  }
 
   const submit = async () => {
     const values = await form.validateFields()
@@ -72,6 +91,8 @@ export default function Broadcasts() {
     { title: 'Holat', dataIndex: 'is_completed', width: 110, render: (v) => (v ? <Tag color="green">Tugatilgan</Tag> : <Tag color="blue">Yuborilmoqda</Tag>) },
   ]
 
+  const accept = contentType === 'photo' ? 'image/*' : contentType === 'video' ? 'video/*' : undefined
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
@@ -84,7 +105,7 @@ export default function Broadcasts() {
         showIcon
         style={{ marginBottom: 16 }}
         message="Xabar bot jarayoni orqali yuboriladi"
-        description="Matnli xabarni shu yerdan yuboring. Rasm/video/fayl uchun Telegram file_id kerak (botga yuborilgan medianing file_id si). Progress jonli yangilanadi."
+        description="Matn yoki media (rasm/video/fayl) yuboring. Media uchun faylni to'g'ridan-to'g'ri yuklang — file_id avtomatik olinadi. Progress jonli yangilanadi."
       />
 
       <Table
@@ -102,6 +123,7 @@ export default function Broadcasts() {
         onOk={submit}
         onCancel={() => setOpen(false)}
         confirmLoading={sending}
+        okButtonProps={{ disabled: uploading }}
         okText="Yuborish"
         cancelText="Bekor"
         destroyOnHidden
@@ -113,11 +135,25 @@ export default function Broadcasts() {
           <Form.Item name="content_type" label="Xabar turi" rules={[{ required: true }]}>
             <Select options={CONTENT_OPTIONS} />
           </Form.Item>
+
           {contentType && contentType !== 'text' && (
-            <Form.Item name="file_id" label="Telegram file_id" rules={[{ required: true, message: 'file_id shart' }]}>
-              <Input placeholder="Telegram media file_id" />
-            </Form.Item>
+            <>
+              <Form.Item label="Media fayl">
+                <Upload maxCount={1} showUploadList={false} accept={accept} customRequest={handleUpload}>
+                  <Button icon={<UploadOutlined />} loading={uploading}>
+                    Fayl yuklash (Telegram'ga)
+                  </Button>
+                </Upload>
+                <Typography.Text type="secondary" style={{ display: 'block', marginTop: 4, fontSize: 12 }}>
+                  Yuklangач file_id avtomatik to'ladi. Katta video/fayl uchun biroz kutiladi.
+                </Typography.Text>
+              </Form.Item>
+              <Form.Item name="file_id" label="Telegram file_id" rules={[{ required: true, message: 'Fayl yuklang yoki file_id kiriting' }]}>
+                <Input placeholder="Yuklangach avtomatik, yoki qo'lda kiriting" />
+              </Form.Item>
+            </>
           )}
+
           <Form.Item name="text" label={contentType === 'text' ? 'Matn' : 'Izoh (caption)'}>
             <Input.TextArea rows={6} placeholder="Xabar matni... (HTML: <b>, <i>, <a> ishlaydi)" />
           </Form.Item>
