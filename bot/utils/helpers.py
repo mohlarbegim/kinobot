@@ -151,6 +151,23 @@ def record_channel_subscriptions(user_id: int, channel_ids: list):
 
 
 @sync_to_async
+def get_confirmed_channel_ids(user_id: int) -> set:
+    """
+    Foydalanuvchi tasdiqlagan kanallar (Channel PK) to'plami.
+
+    Instagram / bot / tashqi kanallar Telegram API bilan tekshirib bo'lmaydi,
+    shuning uchun foydalanuvchi "Obuna bo'ldim" tugmasini bosib tasdiqlaydi va
+    ChannelSubscription yozuvi yaratiladi. Shu yozuvlar shu yerda qaytadi.
+    """
+    from apps.channels.models import ChannelSubscription
+    return set(
+        ChannelSubscription.objects
+        .filter(user__user_id=user_id)
+        .values_list('channel_id', flat=True)
+    )
+
+
+@sync_to_async
 def get_channel_subscription_count(channel_pk: int) -> int:
     """Kanal obunachilari sonini olish"""
     from apps.channels.models import ChannelSubscription

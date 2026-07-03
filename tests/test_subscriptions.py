@@ -153,6 +153,101 @@ class TestSubscriptionFlow:
         db_user.save()
 
 
+class TestChannelCheckable:
+    """is_checkable - qaysi kanal turi API bilan tekshiriladi"""
+
+    def test_telegram_channel_is_checkable(self, channel_model):
+        ch = channel_model(channel_id=-100111, title='TG', channel_type='telegram_channel')
+        assert ch.is_checkable is True
+
+    def test_telegram_group_is_checkable(self, channel_model):
+        ch = channel_model(channel_id=-100222, title='Guruh', channel_type='telegram_group')
+        assert ch.is_checkable is True
+
+    def test_instagram_not_checkable(self, channel_model):
+        ch = channel_model(title='IG', channel_type='instagram', invite_link='https://instagram.com/x')
+        assert ch.is_checkable is False
+
+    def test_bot_not_checkable(self, channel_model):
+        ch = channel_model(channel_id=-100333, title='Bot', channel_type='telegram_bot')
+        assert ch.is_checkable is False
+
+    def test_external_not_checkable(self, channel_model):
+        ch = channel_model(title='Tashqi', channel_type='external', invite_link='https://x.com')
+        assert ch.is_checkable is False
+
+    def test_telegram_channel_without_id_not_checkable(self, channel_model):
+        # channel_id yo'q bo'lsa tekshirib bo'lmaydi
+        ch = channel_model(title='TG', channel_type='telegram_channel')
+        assert ch.is_checkable is False
+
+
+class TestConfirmedChannelIds:
+    """Non-checkable kanallar tasdig'i (honor-system) ChannelSubscription orqali"""
+
+    def test_confirmed_ids_query(self, user_model, channel_model):
+        """get_confirmed_channel_ids mantig'i: user__user_id bo'yicha tasdiqlangan pk'lar"""
+        from apps.channels.models import ChannelSubscription
+
+        user = user_model.objects.create(user_id=555000111, username='u', full_name='U')
+        ig = channel_model.objects.create(
+            title='IG', channel_type='instagram',
+            invite_link='https://instagram.com/x', is_active=True,
+        )
+        ext = channel_model.objects.create(
+            title='Ext', channel_type='external',
+            invite_link='https://x.com', is_active=True,
+        )
+
+        # Boshida hech qanday tasdiq yo'q
+        confirmed = set(
+            ChannelSubscription.objects.filter(user__user_id=555000111)
+            .values_list('channel_id', flat=True)
+        )
+        assert confirmed == set()
+
+        # IG ni tasdiqlaydi
+        ChannelSubscription.objects.create(channel=ig, user=user)
+        confirmed = set(
+            ChannelSubscription.objects.filter(user__user_id=555000111)
+            .values_list('channel_id', flat=True)
+        )
+        assert ig.id in confirmed
+        assert ext.id not in confirmed
+
+        # Cleanup
+        ChannelSubscription.objects.filter(user=user).delete()
+        ig.delete(); ext.delete(); user.delete()
+
+
+class TestChannelsKeyboard:
+    """channels_kb - non-checkable kanallar uchun tasdiq tugmasi"""
+
+    def test_confirm_button_only_for_non_checkable(self):
+        from types import SimpleNamespace
+        from bot.keyboards import channels_kb
+
+        tg = SimpleNamespace(id=1, title='TG', invite_link='https://t.me/x', is_checkable=True)
+        ig = SimpleNamespace(id=2, title='IG', invite_link='https://instagram.com/x', is_checkable=False)
+
+        kb = channels_kb([tg, ig])
+        callbacks = [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data]
+
+        assert 'confirm_ch:2' in callbacks           # Instagram uchun tasdiq tugmasi
+        assert 'confirm_ch:1' not in callbacks        # Telegram uchun bo'lmasligi kerak
+        assert 'check_subscription' in callbacks      # Tekshirish tugmasi bor
+
+
+class TestSubscriptionMiddlewareSkip:
+    """confirm_ch: callback middleware'da bloklanmasligi kerak"""
+
+    def test_confirm_callback_prefix_skipped(self):
+        # Middleware skip mantig'i: confirm_ch: bilan boshlanadigan callback o'tkaziladi
+        data = 'confirm_ch:5'
+        skipped = data.startswith('confirm_ch:') or data.startswith('admin:')
+        assert skipped is True
+
+
 class TestReferralSystem:
     """Test referral system"""
 

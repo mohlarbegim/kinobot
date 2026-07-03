@@ -21,18 +21,32 @@ def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
 
 
 def channels_kb(channels: list, check: bool = True) -> InlineKeyboardMarkup:
-    """Majburiy kanallar - chiroyli"""
+    """Majburiy kanallar.
+
+    - Telegram kanal/guruh (checkable): faqat havola tugmasi. Obuna avtomatik
+      (get_chat_member) tekshiriladi.
+    - Instagram / bot / tashqi (non-checkable): havola + "obuna bo'ldim" tugmasi.
+      Bot bunday obunani API bilan tekshira olmaydi, shuning uchun foydalanuvchi
+      o'zi tasdiqlaydi (confirm_ch:<pk>).
+    """
     builder = InlineKeyboardBuilder()
 
     for channel in channels:
+        # is_checkable model instance property'si; not_subscribed model obyektlari uzatiladi
+        checkable = getattr(channel, 'is_checkable', True)
         builder.row(InlineKeyboardButton(
             text=f"📢 {channel.title}",
             url=channel.invite_link
         ))
+        if not checkable:
+            builder.row(InlineKeyboardButton(
+                text=f"✅ {channel.title} — obuna bo'ldim",
+                callback_data=f"confirm_ch:{channel.id}"
+            ))
 
     if check:
         builder.row(InlineKeyboardButton(
-            text="✅ Tekshirish",
+            text="🔄 Tekshirish",
             callback_data="check_subscription"
         ))
 

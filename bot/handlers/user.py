@@ -20,7 +20,7 @@ from bot.keyboards import (
     search_filter_kb, filter_country_kb, filter_language_kb, filter_year_kb,
     flash_sale_tariffs_kb, filter_movies_kb
 )
-from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, esc
+from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, esc
 from apps.payments.models import PendingPaymentSession
 from datetime import timedelta
 from django.utils import timezone as dj_timezone
@@ -131,8 +131,7 @@ async def cmd_start(message: Message, bot: Bot):
 
         await message.answer(
             f"👋 Salom, <b>{esc(user.full_name)}</b>!\n\n"
-            "📢 Botdan foydalanish uchun kanallarga obuna bo'ling:\n\n"
-            "✅ <b>Tekshirish</b> tugmasini bosing.",
+            + _subscription_prompt_text(not_subscribed),
             reply_markup=channels_kb(not_subscribed)
         )
         return
@@ -153,6 +152,28 @@ async def cmd_start(message: Message, bot: Bot):
 
 # ==================== OBUNA TEKSHIRISH ====================
 
+async def _finalize_subscription_success(callback: CallbackQuery, user):
+    """Barcha kanallar obuna/tasdiqlanganda: yozib qo'yish + menyuni ko'rsatish."""
+    # Bot orqali obuna bo'lgan kanallarni yozamiz (get_or_create - takrorlanmaydi)
+    if user.id in _pending_subscriptions:
+        pending_channel_ids = _pending_subscriptions.pop(user.id)
+        if pending_channel_ids:
+            await record_channel_subscriptions(user.id, pending_channel_ids)
+            # Birinchi kanalni "kelgan kanal" sifatida saqlaymiz
+            await update_user_joined_channel(user.id, pending_channel_ids[0])
+
+    is_admin = await is_user_admin(user.id)
+
+    try:
+        await callback.message.edit_text(
+            "✅ Obuna tasdiqlandi!\n\n"
+            "🎬 Kino kodini yuboring:",
+            reply_markup=main_menu_inline_kb(is_admin=is_admin)
+        )
+    except TelegramBadRequest:
+        pass  # Xabar o'zgartirilmagan (masalan, video xabar)
+
+
 @router.callback_query(F.data == "check_subscription")
 async def check_sub_callback(callback: CallbackQuery, bot: Bot):
     """Obunani tekshirish"""
@@ -169,12 +190,19 @@ async def check_sub_callback(callback: CallbackQuery, bot: Bot):
         # Obuna bo'lmagan kanallarni eslab qolamiz
         _pending_subscriptions[user.id] = [ch.id for ch in not_subscribed]
 
-        await callback.answer("❌ Barcha kanallarga obuna bo'ling!", show_alert=True)
+        # Instagram/tashqi kanal bo'lsa foydalanuvchiga tasdiq kerakligini eslatamiz
+        has_non_checkable = any(not ch.is_checkable for ch in not_subscribed)
+        alert = (
+            "❌ Avval kanallarga obuna bo'ling. Instagram/tashqi kanal uchun "
+            "«Obuna bo'ldim» tugmasini bosing."
+            if has_non_checkable
+            else "❌ Barcha kanallarga obuna bo'ling!"
+        )
+        await callback.answer(alert, show_alert=True)
         # Kanallar ro'yxatini yangilash
         try:
             await callback.message.edit_text(
-                "📢 <b>Kanallarga obuna bo'ling:</b>\n\n"
-                "Obuna bo'lgach, <b>✅ Tekshirish</b> tugmasini bosing.",
+                _subscription_prompt_text(not_subscribed),
                 reply_markup=channels_kb(not_subscribed)
             )
         except TelegramBadRequest:
@@ -182,27 +210,74 @@ async def check_sub_callback(callback: CallbackQuery, bot: Bot):
         return
 
     await callback.answer("✅ Tasdiqlandi!")
+    await _finalize_subscription_success(callback, user)
 
-    # Faqat bot orqali obuna bo'lgan kanallarni yozamiz
-    if user.id in _pending_subscriptions:
-        pending_channel_ids = _pending_subscriptions.pop(user.id)
-        if pending_channel_ids:
-            # Faqat kutilgan kanallarni yozamiz
-            await record_channel_subscriptions(user.id, pending_channel_ids)
 
-            # Birinchi kanalni "kelgan kanal" sifatida saqlaymiz
-            await update_user_joined_channel(user.id, pending_channel_ids[0])
+@router.callback_query(F.data.startswith("confirm_ch:"))
+async def confirm_channel_callback(callback: CallbackQuery, bot: Bot):
+    """
+    Instagram / bot / tashqi kanal obunasini tasdiqlash.
 
-    is_admin = await is_user_admin(user.id)
+    Telegram bot bunday kanallar obunasini API bilan tekshira olmaydi, shuning
+    uchun foydalanuvchi havolaga o'tib, obuna bo'lgach shu tugmani bosadi va
+    tasdig'i ChannelSubscription sifatida yoziladi (honor-system).
+    """
+    from bot.middlewares.subscription import clear_subscription_cache
+
+    user = callback.from_user
 
     try:
-        await callback.message.edit_text(
-            f"✅ Obuna tasdiqlandi!\n\n"
-            "🎬 Kino kodini yuboring:",
-            reply_markup=main_menu_inline_kb(is_admin=is_admin)
+        channel_pk = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer()
+        return
+
+    channel = await get_channel_by_pk(channel_pk)
+    if not channel or not channel.is_active:
+        await callback.answer("❌ Kanal topilmadi", show_alert=True)
+        return
+
+    # Tekshirib bo'ladigan (Telegram) kanalni bu tugma orqali tasdiqlashga yo'l qo'ymaymiz
+    if channel.is_checkable:
+        await callback.answer("Bu kanal avtomatik tekshiriladi — obuna bo'ling.", show_alert=True)
+        return
+
+    # Tasdiqni yozamiz + cache tozalaymiz
+    await record_channel_subscriptions(user.id, [channel_pk])
+    clear_subscription_cache(user.id)
+    await callback.answer("✅ Tasdiqlandi!")
+
+    # Qolgan kanallarni qayta tekshiramiz
+    not_subscribed = await check_subscription(bot, user.id)
+
+    if not_subscribed:
+        _pending_subscriptions[user.id] = [ch.id for ch in not_subscribed]
+        try:
+            await callback.message.edit_text(
+                _subscription_prompt_text(not_subscribed),
+                reply_markup=channels_kb(not_subscribed)
+            )
+        except TelegramBadRequest:
+            pass
+        return
+
+    # Hammasi tayyor
+    await _finalize_subscription_success(callback, user)
+
+
+def _subscription_prompt_text(not_subscribed: list) -> str:
+    """Obuna so'rovi matni - Instagram/tashqi kanal bo'lsa qo'shimcha izoh bilan."""
+    text = (
+        "📢 <b>Botdan foydalanish uchun kanallarga obuna bo'ling:</b>\n\n"
+    )
+    if any(not ch.is_checkable for ch in not_subscribed):
+        text += (
+            "• Telegram kanallariga obuna bo'ling.\n"
+            "• Instagram/tashqi sahifaga o'tib, obuna bo'lgach «✅ ... obuna bo'ldim» "
+            "tugmasini bosing.\n\n"
         )
-    except TelegramBadRequest:
-        pass  # Xabar o'zgartirilmagan
+    text += "So'ng <b>🔄 Tekshirish</b> tugmasini bosing."
+    return text
 
 
 # ==================== BACK TO MENU ====================
@@ -249,8 +324,7 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
     not_subscribed = await check_user_subscription(bot, user_id, db_user)
     if not_subscribed:
         await message.answer(
-            "📢 <b>Kino ko'rish uchun kanallarga obuna bo'ling:</b>\n\n"
-            "Obuna bo'lgach, <b>✅ Tekshirish</b> tugmasini bosing.",
+            _subscription_prompt_text(not_subscribed),
             reply_markup=channels_kb(not_subscribed)
         )
         return
@@ -671,8 +745,7 @@ async def random_movie_handler(message: Message, db_user: User = None, bot: Bot 
     not_subscribed = await check_user_subscription(bot, user_id, db_user)
     if not_subscribed:
         await message.answer(
-            "📢 <b>Kino ko'rish uchun kanallarga obuna bo'ling:</b>\n\n"
-            "Obuna bo'lgach, <b>✅ Tekshirish</b> tugmasini bosing.",
+            _subscription_prompt_text(not_subscribed),
             reply_markup=channels_kb(not_subscribed)
         )
         return
@@ -875,8 +948,7 @@ async def movie_callback(callback: CallbackQuery, db_user: User = None, bot: Bot
     if not_subscribed:
         await callback.answer("❌ Avval kanallarga obuna bo'ling!", show_alert=True)
         await callback.message.answer(
-            "📢 <b>Kino ko'rish uchun kanallarga obuna bo'ling:</b>\n\n"
-            "Obuna bo'lgach, <b>✅ Tekshirish</b> tugmasini bosing.",
+            _subscription_prompt_text(not_subscribed),
             reply_markup=channels_kb(not_subscribed)
         )
         return
@@ -1424,32 +1496,55 @@ async def help_handler(message: Message):
 # ==================== DATABASE FUNCTIONS ====================
 
 async def check_subscription(bot: Bot, user_id: int) -> list:
-    """Kanalga obunani tekshirish"""
+    """
+    Kanalga obunani tekshirish.
+
+    - Telegram kanal/guruh (checkable): get_chat_member orqali haqiqiy tekshiriladi.
+    - Instagram / bot / tashqi (non-checkable): Telegram API bilan tekshirib bo'lmaydi,
+      shuning uchun foydalanuvchi "Obuna bo'ldim" tugmasi bilan tasdiqlagan bo'lishi
+      shart (ChannelSubscription yozuvi). Tasdiqlamagan bo'lsa obuna bo'lmagan hisoblanadi.
+    """
     channels = await get_active_channels()
     not_subscribed = []
+    confirmed_ids = None  # lazy - faqat non-checkable kanal uchraganda yuklanadi
 
     for channel in channels:
-        if not channel.is_checkable:
-            continue
-
-        try:
-            member = await bot.get_chat_member(channel.channel_id, user_id)
-            if member.status in ['left', 'kicked']:
+        if channel.is_checkable:
+            try:
+                member = await bot.get_chat_member(channel.channel_id, user_id)
+                if member.status in ['left', 'kicked']:
+                    not_subscribed.append(channel)
+            except TelegramBadRequest as e:
+                # Bot kanalni tekshira olmadi (admin emas / kanal topilmadi) -> foydalanuvchini
+                # BLOKLAMAYMIZ (fail-open), aks holda bitta noto'g'ri kanal hammani qulflaydi.
+                # Middleware bilan bir xil xatti-harakat; admin ko'rishi uchun log yozamiz.
+                logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
+            except Exception as e:
+                logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
+        else:
+            # Instagram / bot / tashqi - tasdiq (honor-system) orqali
+            if confirmed_ids is None:
+                confirmed_ids = await get_confirmed_channel_ids(user_id)
+            if channel.id not in confirmed_ids:
                 not_subscribed.append(channel)
-        except TelegramBadRequest as e:
-            # Bot kanalni tekshira olmadi (admin emas / kanal topilmadi) -> foydalanuvchini
-            # BLOKLAMAYMIZ (fail-open), aks holda bitta noto'g'ri kanal hammani qulflaydi.
-            # Middleware bilan bir xil xatti-harakat; admin ko'rishi uchun log yozamiz.
-            logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
-        except Exception as e:
-            logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
 
     return not_subscribed
 
 
 @sync_to_async
 def get_active_channels():
-    return list(Channel.objects.filter(is_active=True, channel_id__isnull=False))
+    # Barcha aktiv kanallar (Instagram/tashqi ham) - non-checkable kanallar ham
+    # tasdiq orqali majburiy qilinadi.
+    return list(Channel.objects.filter(is_active=True).order_by('order'))
+
+
+@sync_to_async
+def get_channel_by_pk(pk: int):
+    """Kanal olish (Django PK bo'yicha)"""
+    try:
+        return Channel.objects.get(id=pk)
+    except Channel.DoesNotExist:
+        return None
 
 
 @sync_to_async
