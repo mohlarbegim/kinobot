@@ -46,12 +46,33 @@ async def inline_search(inline_query: InlineQuery):
         )
         return
 
+    # Foydalanuvchi premium kinolarni ko'ra oladimi (haqiqiy premium, trial EMAS)
+    user_is_premium = await user_can_watch_premium(inline_query.from_user.id)
+
     # Natijalarni tayyorlash
     results = []
 
     for movie in movies:
         # Unique ID yaratish
         result_id = md5(f"{movie.id}_{movie.code}".encode()).hexdigest()
+
+        # Premium kino + premium bo'lmagan foydalanuvchi -> videoni BERMAYMIZ.
+        # O'rniga "Premium sotib oling" natijasi ko'rsatiladi (paywall bypass'ni oldini oladi).
+        if movie.is_premium and not user_is_premium:
+            results.append(InlineQueryResultArticle(
+                id=result_id,
+                title=f"💎 {movie.display_title} (Premium)",
+                description="Premium kino — ko'rish uchun Premium sotib oling",
+                input_message_content=InputTextMessageContent(
+                    message_text=(
+                        f"💎 <b>{esc(movie.display_title)}</b>\n\n"
+                        "Bu <b>Premium</b> kino. Ko'rish uchun Premium sotib oling.\n"
+                        "👉 /premium"
+                    ),
+                    parse_mode="HTML"
+                )
+            ))
+            continue
 
         # Video natija
         try:
@@ -95,3 +116,11 @@ def search_movies_inline(query: str, limit: int = 20):
             is_active=True
         ).order_by('-views')[:limit]
     )
+
+
+@sync_to_async
+def user_can_watch_premium(user_id: int) -> bool:
+    """Foydalanuvchi premium kinolarni ko'ra oladimi (haqiqiy premium, trial emas)."""
+    from apps.users.models import User
+    u = User.objects.filter(user_id=user_id).first()
+    return bool(u and u.is_premium_active)

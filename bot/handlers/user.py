@@ -273,7 +273,7 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
         return
 
     # Premium check
-    if movie.is_premium and not (db_user and db_user.can_watch_movies):
+    if movie.is_premium and not (db_user and db_user.is_premium_active):
         is_admin = await is_user_admin(user_id)
         await message.answer(
             f"💎 <b>{esc(movie.display_title)}</b>\n\n"
@@ -353,7 +353,7 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
         return
 
     # Premium tekshirish
-    if movie.is_premium and not (db_user and db_user.can_watch_movies):
+    if movie.is_premium and not (db_user and db_user.is_premium_active):
         await callback.answer("💎 Bu Premium kino! Premium olish uchun menudagi tugmani bosing.", show_alert=True)
         return
 
@@ -564,7 +564,7 @@ async def top_movies_handler(message: Message):
 async def premium_movies_callback(callback: CallbackQuery, db_user: User = None):
     """Premium kinolar - videolar bilan"""
     # Premium/trial bo'lmagan foydalanuvchilarga premium video katalogini bermaymiz
-    if not (db_user and db_user.can_watch_movies):
+    if not (db_user and db_user.is_premium_active):
         await callback.answer("💎 Bu bo'lim faqat Premium foydalanuvchilar uchun.", show_alert=True)
         return
 
@@ -683,7 +683,7 @@ async def random_movie_handler(message: Message, db_user: User = None, bot: Bot 
         await message.answer("📭 Kinolar topilmadi.", reply_markup=back_kb())
         return
 
-    if movie.is_premium and not (db_user and db_user.can_watch_movies):
+    if movie.is_premium and not (db_user and db_user.is_premium_active):
         is_admin = await is_user_admin(user_id)
         await message.answer(
             f"💎 <b>{esc(movie.display_title)}</b>\n\n"
@@ -894,7 +894,7 @@ async def movie_callback(callback: CallbackQuery, db_user: User = None, bot: Bot
         await callback.answer("❌ Kino topilmadi.", show_alert=True)
         return
 
-    if movie.is_premium and not (db_user and db_user.can_watch_movies):
+    if movie.is_premium and not (db_user and db_user.is_premium_active):
         await callback.answer("💎 Bu Premium kino!", show_alert=True)
         return
 
@@ -1324,7 +1324,7 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
         return
 
     # Premium check
-    if movie.is_premium and not (db_user and db_user.can_watch_movies):
+    if movie.is_premium and not (db_user and db_user.is_premium_active):
         await callback.answer("💎 Bu Premium kino!", show_alert=True)
         return
 
@@ -1371,7 +1371,7 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
         await callback.answer("📭 Kinolar topilmadi.", show_alert=True)
         return
 
-    if movie.is_premium and not (db_user and db_user.can_watch_movies):
+    if movie.is_premium and not (db_user and db_user.is_premium_active):
         await callback.answer("💎 Premium kino tushdi! Premium oling.", show_alert=True)
         return
 
