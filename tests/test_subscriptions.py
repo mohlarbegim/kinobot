@@ -221,7 +221,7 @@ class TestConfirmedChannelIds:
 
 
 class TestChannelsKeyboard:
-    """channels_kb - non-checkable kanallar uchun tasdiq tugmasi"""
+    """channels_kb - non-checkable kanallar uchun tasdiq tugmasi + double-confirm"""
 
     def test_confirm_button_only_for_non_checkable(self):
         from types import SimpleNamespace
@@ -237,15 +237,52 @@ class TestChannelsKeyboard:
         assert 'confirm_ch:1' not in callbacks        # Telegram uchun bo'lmasligi kerak
         assert 'check_subscription' in callbacks      # Tekshirish tugmasi bor
 
+    def test_confirming_id_shows_yes_button(self):
+        """confirming_id berilganda o'sha kanal 'Ha, tasdiqlayman' (confirm_ch_yes) bo'ladi"""
+        from types import SimpleNamespace
+        from bot.keyboards import channels_kb
+
+        ig = SimpleNamespace(id=2, title='IG', invite_link='https://instagram.com/x',
+                             is_checkable=False, channel_type='instagram')
+        kb = channels_kb([ig], confirming_id=2)
+        callbacks = [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data]
+
+        assert 'confirm_ch_yes:2' in callbacks       # ikkinchi tasdiq tugmasi
+        assert 'confirm_ch:2' not in callbacks        # birinchi bosish tugmasi endi yo'q
+
+
+class TestSubscriptionPromptText:
+    """subscription_prompt_text - bosqichga qarab matn"""
+
+    def _ns(self, checkable):
+        from types import SimpleNamespace
+        return SimpleNamespace(id=1, title='X', invite_link='https://x', is_checkable=checkable)
+
+    def test_stage1_telegram_text(self):
+        from bot.keyboards import subscription_prompt_text
+        text = subscription_prompt_text([self._ns(True)])
+        assert 'Tekshirish' in text
+
+    def test_stage2_instagram_text(self):
+        from bot.keyboards import subscription_prompt_text
+        # Barcha kanal non-checkable -> 2-bosqich (Instagram) matni
+        text = subscription_prompt_text([self._ns(False)])
+        assert '📸' in text
+
+    def test_confirming_text(self):
+        from bot.keyboards import subscription_prompt_text
+        text = subscription_prompt_text([self._ns(False)], confirming=True)
+        assert 'Rostdan' in text
+
 
 class TestSubscriptionMiddlewareSkip:
-    """confirm_ch: callback middleware'da bloklanmasligi kerak"""
+    """confirm_ch* callback middleware'da bloklanmasligi kerak"""
 
     def test_confirm_callback_prefix_skipped(self):
-        # Middleware skip mantig'i: confirm_ch: bilan boshlanadigan callback o'tkaziladi
-        data = 'confirm_ch:5'
-        skipped = data.startswith('confirm_ch:') or data.startswith('admin:')
-        assert skipped is True
+        # Middleware skip: confirm_ch prefiksi ikkala callback'ni ham qamrab oladi
+        for data in ('confirm_ch:5', 'confirm_ch_yes:5'):
+            skipped = data.startswith('confirm_ch') or data.startswith('admin:')
+            assert skipped is True, data
 
 
 class TestReferralSystem:

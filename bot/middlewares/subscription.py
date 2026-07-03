@@ -52,7 +52,7 @@ class SubscriptionMiddleware(BaseMiddleware):
             if event.data and (
                 event.data in self.SKIP_CALLBACKS
                 or event.data.startswith('admin:')
-                or event.data.startswith('confirm_ch:')  # non-checkable kanal tasdig'i
+                or event.data.startswith('confirm_ch')  # confirm_ch: va confirm_ch_yes:
             ):
                 return await handler(event, data)
 
@@ -68,15 +68,8 @@ class SubscriptionMiddleware(BaseMiddleware):
                 _subscription_cache[cache_key] = not_subscribed
 
             if not_subscribed:
-                from bot.keyboards import channels_kb
-                text = "📢 <b>Botdan foydalanish uchun kanallarga obuna bo'ling:</b>\n\n"
-                if any(not ch.is_checkable for ch in not_subscribed):
-                    text += (
-                        "• Telegram kanallariga obuna bo'ling.\n"
-                        "• Instagram/tashqi sahifaga o'tib, obuna bo'lgach "
-                        "«✅ ... obuna bo'ldim» tugmasini bosing.\n\n"
-                    )
-                text += "So'ng <b>🔄 Tekshirish</b> tugmasini bosing."
+                from bot.keyboards import channels_kb, subscription_prompt_text
+                text = subscription_prompt_text(not_subscribed)
 
                 if isinstance(event, Message):
                     await event.answer(text, reply_markup=channels_kb(not_subscribed))
@@ -91,18 +84,18 @@ class SubscriptionMiddleware(BaseMiddleware):
 
     async def _check_subscription(self, bot: Bot, user_id: int) -> list:
         """
-        Obunani tekshirish.
+        Obunani IKKI BOSQICHLI tekshirish. Joriy bosqich kanallarini qaytaradi
+        (bo'sh = hammasi bajarilgan). Handlerdagi check_subscription bilan bir xil.
 
-        - Telegram kanal/guruh (checkable): get_chat_member orqali tekshiriladi.
-        - Instagram / bot / tashqi (non-checkable): API bilan tekshirib bo'lmaydi,
-          shuning uchun foydalanuvchi "Obuna bo'ldim" tugmasi bilan tasdiqlagan
-          bo'lishi shart (ChannelSubscription yozuvi). Tasdiqlamagan bo'lsa -
-          obuna bo'lmagan deb hisoblanadi.
+        1-bosqich (Telegram, checkable): get_chat_member orqali HAQIQIY tekshiriladi.
+        2-bosqich (Instagram / bot / tashqi, non-checkable): "Obuna bo'ldim" tasdig'i
+          (ChannelSubscription). Faqat barcha Telegram kanallar bajarilgach ko'rsatiladi.
         """
         from bot.utils import get_confirmed_channel_ids
 
         channels = await self._get_channels_cached()
-        not_subscribed = []
+        checkable_missing = []
+        noncheckable_missing = []
         confirmed_ids = None  # lazy - faqat non-checkable kanal bo'lsa yuklanadi
 
         for channel in channels:
@@ -110,7 +103,7 @@ class SubscriptionMiddleware(BaseMiddleware):
                 try:
                     member = await bot.get_chat_member(channel.channel_id, user_id)
                     if member.status in ['left', 'kicked']:
-                        not_subscribed.append(channel)
+                        checkable_missing.append(channel)
                 except TelegramBadRequest as e:
                     # Bot kanalni tekshira olmadi (admin emas / topilmadi) -> fail-open (o'tkazamiz),
                     # lekin admin sozlamani tuzatishi uchun warning log yozamiz.
@@ -120,9 +113,10 @@ class SubscriptionMiddleware(BaseMiddleware):
                 if confirmed_ids is None:
                     confirmed_ids = await get_confirmed_channel_ids(user_id)
                 if channel.id not in confirmed_ids:
-                    not_subscribed.append(channel)
+                    noncheckable_missing.append(channel)
 
-        return not_subscribed
+        # Avval Telegram, hammasi OK bo'lsa Instagram; ikkalasi bo'sh = tayyor
+        return checkable_missing or noncheckable_missing
 
     async def _get_channels_cached(self):
         """Get channels with cache"""
