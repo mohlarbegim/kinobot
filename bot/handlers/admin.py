@@ -401,11 +401,17 @@ async def add_movie_title(message: Message, state: FSMContext):
     data = await state.get_data()
     await state.update_data(title=message.text.strip())
     await state.set_state(AddMovieState.video)
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ Videosiz o'tkazib yuborish", callback_data="video:skip")],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")]
+    ])
     await message.answer(
         f"✅ Kod: <code>{data.get('code')}</code>\n"
         f"✅ Nom: {message.text.strip()}\n\n"
-        "3️⃣ Video faylni yuboring:",
-        reply_markup=cancel_inline_kb()
+        "3️⃣ Video faylni yuboring:\n"
+        "<i>Yoki videoni keyinroq qo'shish uchun «⏭ Videosiz o'tkazib yuborish»ni bosing.</i>",
+        reply_markup=kb
     )
 
 
@@ -418,7 +424,12 @@ async def add_movie_video(message: Message, state: FSMContext):
         if message.document.mime_type and message.document.mime_type.startswith('video/'):
             file_id = message.document.file_id
         else:
-            await message.answer("❌ Faqat video fayl!", reply_markup=cancel_inline_kb())
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏭ Videosiz o'tkazib yuborish", callback_data="video:skip")],
+                [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")]
+            ])
+            await message.answer("❌ Faqat video fayl!", reply_markup=kb)
             return
     else:
         return
@@ -447,6 +458,37 @@ async def add_movie_video(message: Message, state: FSMContext):
             "4️⃣ Sifatni tanlang:",
             reply_markup=movie_quality_kb()
         )
+
+
+@router.callback_query(AddMovieState.video, F.data == "video:skip")
+async def add_movie_video_skip(callback: CallbackQuery, state: FSMContext):
+    """Videoni o'tkazib yuborish - kino videosiz qo'shiladi (video keyin yuklanadi)."""
+    data = await state.get_data()
+    await state.update_data(file_id="")
+    await state.set_state(AddMovieState.category)
+
+    note = "⏭ Video o'tkazildi (keyin qo'shiladi)"
+    categories = await get_categories()
+
+    if categories:
+        await callback.message.edit_text(
+            f"✅ Kod: <code>{data.get('code')}</code>\n"
+            f"✅ Nom: {data.get('title')}\n"
+            f"{note}\n\n"
+            "4️⃣ Janrni tanlang:",
+            reply_markup=admin_categories_kb(categories)
+        )
+    else:
+        await state.update_data(category_id=None)
+        await state.set_state(AddMovieState.quality)
+        await callback.message.edit_text(
+            f"✅ Kod: <code>{data.get('code')}</code>\n"
+            f"✅ Nom: {data.get('title')}\n"
+            f"{note}\n\n"
+            "4️⃣ Sifatni tanlang:",
+            reply_markup=movie_quality_kb()
+        )
+    await callback.answer()
 
 
 @router.callback_query(AddMovieState.category, F.data.startswith("admin_category:"))
@@ -715,6 +757,7 @@ async def add_movie_is_premium(callback: CallbackQuery, state: FSMContext):
 
     desc_text = data.get('description', '')[:100] + "..." if len(data.get('description', '')) > 100 else (data.get('description') or "Yo'q")
     premium_text = "💎 Premium" if is_premium else "🆓 Oddiy"
+    video_text = "✅ Yuklangan" if data.get('file_id') else "⏭ Yo'q (keyin qo'shiladi)"
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -733,7 +776,7 @@ async def add_movie_is_premium(callback: CallbackQuery, state: FSMContext):
         f"🌐 Til: {language_display}\n"
         f"📖 Tavsif: {desc_text}\n"
         f"💎 Turi: {premium_text}\n"
-        f"🎥 Video: ✅ Yuklangan\n\n"
+        f"🎥 Video: {video_text}\n\n"
         f"<i>Hammasi to'g'rimi?</i>",
         reply_markup=kb
     )
@@ -750,7 +793,7 @@ async def add_movie_confirm(callback: CallbackQuery, state: FSMContext, db_user:
     movie = await create_movie(
         code=data['code'],
         title=data['title'],
-        file_id=data['file_id'],
+        file_id=data.get('file_id', ''),
         category_id=data.get('category_id'),
         year=data.get('year'),
         country=data.get('country', 'usa'),

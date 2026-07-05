@@ -57,8 +57,8 @@ class Movie(models.Model):
     title = models.CharField(max_length=255, verbose_name='Nomi (original)')
     title_uz = models.CharField(max_length=255, blank=True, default='', verbose_name="Nomi (o'zbekcha)")
 
-    # Telegram
-    file_id = models.CharField(max_length=255, verbose_name='Telegram File ID')
+    # Telegram - ixtiyoriy: kino video'siz ham qo'shilishi mumkin (keyin yuklanadi)
+    file_id = models.CharField(max_length=255, blank=True, default='', verbose_name='Telegram File ID')
     thumbnail_file_id = models.CharField(max_length=255, blank=True, default='', verbose_name='Thumbnail File ID')
 
     # Kategoriya

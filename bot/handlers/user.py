@@ -82,6 +82,22 @@ async def get_bot_username(bot: Bot) -> str:
     return bot_info.username
 
 
+async def send_movie_or_notice(target, movie, caption, reply_markup=None):
+    """
+    Kino videosini yuboradi. Agar file_id bo'sh bo'lsa (video hali yuklanmagan -
+    admin videosiz qo'shgan), video o'rniga matnli xabar yuboradi (crash bo'lmaydi).
+
+    target: Message yoki callback.message (ikkalasida ham answer_video/answer bor).
+    """
+    if movie.file_id:
+        await target.answer_video(video=movie.file_id, caption=caption, reply_markup=reply_markup)
+    else:
+        await target.answer(
+            f"{caption}\n\n⚠️ <i>Video hali yuklanmagan.</i>",
+            reply_markup=reply_markup
+        )
+
+
 async def check_user_subscription(bot: Bot, user_id: int, db_user: User = None) -> list:
     """
     Foydalanuvchi obunasini tekshirish.
@@ -400,10 +416,9 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
         # Saqlangan yoki yo'qligini tekshirish
         is_saved = await check_movie_saved(user_id, movie.code) if db_user else False
 
-        await message.answer_video(
-            video=movie.file_id,
-            caption=caption,
-            reply_markup=movie_action_kb(movie.code, is_saved)
+        await send_movie_or_notice(
+            message, movie, caption,
+            movie_action_kb(movie.code, is_saved)
         )
 
         # Update stats
@@ -792,16 +807,16 @@ async def random_movie_handler(message: Message, db_user: User = None, bot: Bot 
         desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
 
-        await message.answer_video(
-            video=movie.file_id,
-            caption=(
+        await send_movie_or_notice(
+            message, movie,
+            (
                 f"🎲 <b>Random kino:</b>\n\n"
                 f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
                 f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
             ),
-            reply_markup=back_kb()
+            back_kb()
         )
         await increment_movie_views(movie.id)
     except TelegramBadRequest as e:
@@ -999,16 +1014,16 @@ async def movie_callback(callback: CallbackQuery, db_user: User = None, bot: Bot
         desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
 
-        await callback.message.answer_video(
-            video=movie.file_id,
-            caption=(
+        await send_movie_or_notice(
+            callback.message, movie,
+            (
                 f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
                 f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n"
                 f"👁 {format_number(movie.views)}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
             ),
-            reply_markup=back_kb()
+            back_kb()
         )
         await increment_movie_views(movie.id)
         if db_user:
@@ -1430,9 +1445,9 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
         desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
 
-        await callback.message.answer_video(
-            video=movie.file_id,
-            caption=(
+        await send_movie_or_notice(
+            callback.message, movie,
+            (
                 f"❤️ <b>Saqlangan kino:</b>\n\n"
                 f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
                 f"📝 Kod: <code>{esc(movie.code)}</code>\n"
@@ -1440,7 +1455,7 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
                 f"👁 {format_number(movie.views)}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
             ),
-            reply_markup=movie_action_kb(movie.code, is_saved=True)
+            movie_action_kb(movie.code, is_saved=True)
         )
         await increment_movie_views(movie.id)
     except TelegramBadRequest:
@@ -1477,16 +1492,16 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
         year_text = f" • 📅 {movie.year}" if movie.year else ""
         is_saved = await check_movie_saved(user_id, movie.code) if db_user else False
 
-        await callback.message.answer_video(
-            video=movie.file_id,
-            caption=(
+        await send_movie_or_notice(
+            callback.message, movie,
+            (
                 f"🎲 <b>Random kino:</b>\n\n"
                 f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
                 f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
             ),
-            reply_markup=movie_action_kb(movie.code, is_saved)
+            movie_action_kb(movie.code, is_saved)
         )
         await increment_movie_views(movie.id)
     except TelegramBadRequest as e:

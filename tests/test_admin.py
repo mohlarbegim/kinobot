@@ -87,6 +87,31 @@ class TestMovieManagement:
         languages = ['uzbek', 'russian', 'english', 'turkish', 'korean', 'other']
         assert 'uzbek' in languages
 
+    def test_movie_without_video(self, movie_model, db_category):
+        """Videosiz kino qo'shsa bo'ladi (file_id bo'sh) - keyin video qo'shiladi"""
+        movie = movie_model.objects.create(
+            code=76543,
+            title='Videosiz kino',
+            file_id='',           # video o'tkazib yuborilgan
+            category=db_category,
+        )
+        movie.refresh_from_db()
+        assert movie.file_id == ''
+        assert movie_model.objects.filter(code=76543).exists()
+        # Keyin video qo'shish mumkin
+        movie.file_id = 'BAAC_later'
+        movie.save()
+        movie.refresh_from_db()
+        assert movie.file_id == 'BAAC_later'
+        movie.delete()
+
+    def test_movie_serializer_file_id_optional(self):
+        """MovieSerializer file_id'siz ham valid (dashboard video majburiy emas)"""
+        from apps.api.serializers import MovieSerializer
+        s = MovieSerializer(data={'code': 'NOVID-9', 'title': 'X'})
+        assert s.is_valid(), s.errors
+        assert 'file_id' not in s.errors
+
     def test_toggle_movie_status(self, db_movie):
         """Test toggle active status"""
         initial = db_movie.is_active
