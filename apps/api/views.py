@@ -402,7 +402,11 @@ class PaymentViewSet(viewsets.ModelViewSet):
         note = f"Dashboard: {request.user.username}"
         with transaction.atomic():
             try:
-                payment = (Payment.objects.select_for_update()
+                # of=('self',) - faqat Payment qatorini qulflaymiz. tariff FK nullable
+                # (SET_NULL) -> select_related LEFT OUTER JOIN yasaydi; PostgreSQL
+                # nullable outer join'ni FOR UPDATE bilan qulflay olmaydi. User quyida
+                # alohida qulflanadi.
+                payment = (Payment.objects.select_for_update(of=('self',))
                            .select_related('tariff', 'user').get(pk=pk))
             except Payment.DoesNotExist:
                 return Response({'result': 'not_found'}, status=status.HTTP_404_NOT_FOUND)
@@ -437,7 +441,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
     def reject(self, request, pk=None):
         with transaction.atomic():
             try:
-                payment = Payment.objects.select_for_update().select_related('user').get(pk=pk)
+                payment = Payment.objects.select_for_update(of=('self',)).select_related('user').get(pk=pk)
             except Payment.DoesNotExist:
                 return Response({'result': 'not_found'}, status=status.HTTP_404_NOT_FOUND)
             if payment.status != 'pending':

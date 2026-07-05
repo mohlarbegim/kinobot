@@ -84,6 +84,34 @@ class TestPaymentApproval:
         assert payment.status == 'approved'
         payment.delete()
 
+    def test_approve_payment_function_grants_premium(self, payment_model, db_user, db_tariff):
+        """Haqiqiy approve_payment funksiyasi premium beradi (select_for_update(of=) query)."""
+        from bot.handlers.payment import approve_payment
+
+        payment = payment_model.objects.create(
+            user=db_user, tariff=db_tariff, amount=db_tariff.price,
+            status='pending', screenshot_file_id='test'
+        )
+
+        # @sync_to_async ostidagi asl sync funksiyani chaqiramiz (.func)
+        result = approve_payment.func(payment.id, db_user.user_id)
+
+        assert result['result'] == 'ok'
+        assert result['tariff_days'] == db_tariff.days
+
+        payment.refresh_from_db()
+        assert payment.status == 'approved'
+
+        db_user.refresh_from_db()
+        assert db_user.is_premium is True
+        assert db_user.premium_expires is not None
+
+        # Ikkinchi marta tasdiqlash -> 'already' (double-credit bo'lmaydi)
+        result2 = approve_payment.func(payment.id, db_user.user_id)
+        assert result2['result'] == 'already'
+
+        payment.delete()
+
     def test_reject_payment(self, payment_model, db_user, db_tariff):
         """Test reject payment"""
         payment = payment_model.objects.create(

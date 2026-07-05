@@ -316,8 +316,12 @@ def approve_payment(payment_id: int, admin_user_id: int) -> dict:
 
     with transaction.atomic():
         try:
+            # of=('self',) - FAQAT Payment qatorini qulflaymiz. tariff FK nullable
+            # (SET_NULL) bo'lgani uchun select_related LEFT OUTER JOIN yasaydi va
+            # PostgreSQL "FOR UPDATE cannot be applied to the nullable side of an
+            # outer join" xatosini beradi. User quyida alohida qulflanadi.
             payment = (
-                Payment.objects.select_for_update()
+                Payment.objects.select_for_update(of=('self',))
                 .select_related('tariff', 'user')
                 .get(id=payment_id)
             )
@@ -376,8 +380,10 @@ def reject_payment(payment_id: int) -> dict:
 
     with transaction.atomic():
         try:
+            # of=('self',) - faqat Payment qatorini qulflaymiz (approve bilan bir xil,
+            # kelajakda tariff join qo'shilsa ham PostgreSQL xatosidan xoli bo'ladi).
             payment = (
-                Payment.objects.select_for_update()
+                Payment.objects.select_for_update(of=('self',))
                 .select_related('user')
                 .get(id=payment_id)
             )
