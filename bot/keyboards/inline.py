@@ -74,11 +74,10 @@ def channels_kb(channels: list, check: bool = True, confirming_id=None) -> Inlin
 
 
 def subscription_prompt_text(channels: list, confirming: bool = False) -> str:
-    """Obuna so'rovi matni - bosqichga qarab (Telegram / Instagram)."""
-    is_stage2 = bool(channels) and all(
-        not getattr(c, 'is_checkable', True) for c in channels
-    )
+    """Obuna so'rovi matni. Barcha kanallar birga ko'rsatiladi (Telegram + Instagram).
 
+    Instagram/tashqi kanal bo'lsa qo'shimcha "obuna bo'ldim" tasdig'i haqida izoh qo'shadi.
+    """
     if confirming:
         return (
             "⚠️ <b>Rostdan ham obuna bo'ldingizmi?</b>\n\n"
@@ -87,20 +86,19 @@ def subscription_prompt_text(channels: list, confirming: bool = False) -> str:
             "Obuna bo'lgan bo'lsangiz <b>«✅ Ha, ... tasdiqlayman»</b> tugmasini bosing."
         )
 
-    if is_stage2:
-        # 2-bosqich - Instagram / tashqi (tasdiq orqali)
-        return (
-            "📸 <b>Endi quyidagi sahifalarga ham obuna bo'ling:</b>\n\n"
-            "Havolaga o'ting, obuna bo'lgach <b>«✅ ... obuna bo'ldim»</b> tugmasini "
-            "bosing va tasdiqlang.\n\n"
-            "So'ng <b>🔄 Tekshirish</b> tugmasini bosing."
-        )
-
-    # 1-bosqich - Telegram (haqiqiy tekshiriladi)
-    return (
-        "📢 <b>Botdan foydalanish uchun kanallarga obuna bo'ling:</b>\n\n"
-        "Barcha kanallarga obuna bo'lgach <b>🔄 Tekshirish</b> tugmasini bosing."
+    has_non_checkable = bool(channels) and any(
+        not getattr(c, 'is_checkable', True) for c in channels
     )
+
+    text = "📢 <b>Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:</b>\n\n"
+    if has_non_checkable:
+        text += (
+            "• Telegram kanallariga obuna bo'ling.\n"
+            "• Instagram/tashqi sahifaga o'ting va obuna bo'lgach "
+            "<b>«✅ ... obuna bo'ldim»</b> tugmasini bosib tasdiqlang.\n\n"
+        )
+    text += "So'ng <b>🔄 Tekshirish</b> tugmasini bosing."
+    return text
 
 
 def categories_kb(categories: list) -> InlineKeyboardMarkup:

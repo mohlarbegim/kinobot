@@ -215,7 +215,7 @@ async def _finalize_subscription_success(callback: CallbackQuery, user):
 
 
 async def _show_current_stage(callback: CallbackQuery, not_subscribed: list):
-    """Joriy bosqich kanallarini (1: Telegram yoki 2: Instagram) ko'rsatish."""
+    """Bajarilmagan barcha kanallarni (Telegram + Instagram birga) ko'rsatish."""
     _pending_subscriptions[callback.from_user.id] = [ch.id for ch in not_subscribed]
     try:
         await callback.message.edit_text(
@@ -228,7 +228,7 @@ async def _show_current_stage(callback: CallbackQuery, not_subscribed: list):
 
 @router.callback_query(F.data == "check_subscription")
 async def check_sub_callback(callback: CallbackQuery, bot: Bot):
-    """Obunani tekshirish (ikki bosqichli: avval Telegram, so'ng Instagram)."""
+    """Obunani tekshirish (barcha kanallar birga: Telegram + Instagram)."""
     from bot.middlewares.subscription import clear_subscription_cache
 
     user = callback.from_user
@@ -239,12 +239,12 @@ async def check_sub_callback(callback: CallbackQuery, bot: Bot):
     not_subscribed = await check_subscription(bot, user.id)
 
     if not_subscribed:
-        # Qaysi bosqich? check_subscription faqat bitta bosqichni qaytaradi.
-        stage2 = all(not ch.is_checkable for ch in not_subscribed)
-        if stage2:
-            alert = "📸 Instagram/tashqi sahifaga obuna bo'lib «obuna bo'ldim»ni tasdiqlang!"
+        # Instagram/tashqi kanal bo'lsa tasdiq kerakligini eslatamiz
+        has_non_checkable = any(not ch.is_checkable for ch in not_subscribed)
+        if has_non_checkable:
+            alert = "❌ Barcha kanallarga obuna bo'ling! Instagram/tashqi uchun «obuna bo'ldim»ni tasdiqlang."
         else:
-            alert = "❌ Avval barcha Telegram kanallariga obuna bo'ling!"
+            alert = "❌ Barcha kanallarga obuna bo'ling!"
         await callback.answer(alert, show_alert=True)
         await _show_current_stage(callback, not_subscribed)
         return
@@ -1559,17 +1559,12 @@ async def help_handler(message: Message):
 
 async def check_subscription(bot: Bot, user_id: int) -> list:
     """
-    Kanalga obunani IKKI BOSQICHLI tekshirish. Ko'rsatiladigan bosqich kanallarini
-    qaytaradi (bo'sh ro'yxat = hammasi bajarilgan).
+    Kanalga obunani tekshirish. Bajarilmagan BARCHA kanallarni birga qaytaradi
+    (Telegram + Instagram - bitta ekranda). Bo'sh ro'yxat = hammasi bajarilgan.
 
-    1-bosqich (Telegram kanal/guruh, checkable): get_chat_member orqali HAQIQIY
-      tekshiriladi. Obuna bo'lmagan Telegram kanal bo'lsa - faqat shular qaytadi.
-    2-bosqich (Instagram / bot / tashqi, non-checkable): Telegram API tekshira
-      olmaydi, foydalanuvchi "obuna bo'ldim" bilan tasdiqlaydi (ChannelSubscription).
-      Faqat BARCHA Telegram kanallar bajarilgach ko'rsatiladi.
-
-    Shunday qilib Instagram havolasini ko'rish uchun avval (tekshiriladigan) Telegram
-    kanalga obuna bo'lish shart bo'ladi.
+    - Telegram kanal/guruh (checkable): get_chat_member orqali HAQIQIY tekshiriladi.
+    - Instagram / bot / tashqi (non-checkable): Telegram API tekshira olmaydi,
+      foydalanuvchi "obuna bo'ldim" bilan tasdiqlaydi (ChannelSubscription).
     """
     channels = await get_active_channels()
     checkable_missing = []
@@ -1596,8 +1591,8 @@ async def check_subscription(bot: Bot, user_id: int) -> list:
             if channel.id not in confirmed_ids:
                 noncheckable_missing.append(channel)
 
-    # Ikki bosqichli: avval Telegram, hammasi OK bo'lsa Instagram; ikkalasi bo'sh = tayyor
-    return checkable_missing or noncheckable_missing
+    # Barcha bajarilmagan kanallar birga (Telegram + Instagram) - bitta ekranda
+    return checkable_missing + noncheckable_missing
 
 
 @sync_to_async

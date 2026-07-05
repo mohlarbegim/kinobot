@@ -252,22 +252,25 @@ class TestChannelsKeyboard:
 
 
 class TestSubscriptionPromptText:
-    """subscription_prompt_text - bosqichga qarab matn"""
+    """subscription_prompt_text - barcha kanallar birga (Telegram + Instagram)"""
 
     def _ns(self, checkable):
         from types import SimpleNamespace
         return SimpleNamespace(id=1, title='X', invite_link='https://x', is_checkable=checkable)
 
-    def test_stage1_telegram_text(self):
+    def test_telegram_only_text(self):
         from bot.keyboards import subscription_prompt_text
+        # Faqat Telegram -> Instagram izohi bo'lmaydi
         text = subscription_prompt_text([self._ns(True)])
         assert 'Tekshirish' in text
+        assert 'Instagram' not in text
 
-    def test_stage2_instagram_text(self):
+    def test_mixed_text_mentions_instagram(self):
         from bot.keyboards import subscription_prompt_text
-        # Barcha kanal non-checkable -> 2-bosqich (Instagram) matni
-        text = subscription_prompt_text([self._ns(False)])
-        assert '📸' in text
+        # Aralash (Telegram + Instagram) -> Instagram tasdig'i haqida izoh bor
+        text = subscription_prompt_text([self._ns(True), self._ns(False)])
+        assert 'Instagram' in text
+        assert 'obuna bo\'ldim' in text.lower() or 'obuna bo‘ldim' in text.lower()
 
     def test_confirming_text(self):
         from bot.keyboards import subscription_prompt_text

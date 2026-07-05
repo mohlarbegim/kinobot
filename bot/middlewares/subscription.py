@@ -84,12 +84,11 @@ class SubscriptionMiddleware(BaseMiddleware):
 
     async def _check_subscription(self, bot: Bot, user_id: int) -> list:
         """
-        Obunani IKKI BOSQICHLI tekshirish. Joriy bosqich kanallarini qaytaradi
-        (bo'sh = hammasi bajarilgan). Handlerdagi check_subscription bilan bir xil.
+        Obunani tekshirish. Bajarilmagan BARCHA kanallarni birga qaytaradi
+        (Telegram + Instagram - bitta ekranda). Handlerdagi check_subscription bilan bir xil.
 
-        1-bosqich (Telegram, checkable): get_chat_member orqali HAQIQIY tekshiriladi.
-        2-bosqich (Instagram / bot / tashqi, non-checkable): "Obuna bo'ldim" tasdig'i
-          (ChannelSubscription). Faqat barcha Telegram kanallar bajarilgach ko'rsatiladi.
+        - Telegram (checkable): get_chat_member orqali HAQIQIY tekshiriladi.
+        - Instagram / bot / tashqi (non-checkable): "Obuna bo'ldim" tasdig'i (ChannelSubscription).
         """
         from bot.utils import get_confirmed_channel_ids
 
@@ -120,8 +119,8 @@ class SubscriptionMiddleware(BaseMiddleware):
                 if channel.id not in confirmed_ids:
                     noncheckable_missing.append(channel)
 
-        # Avval Telegram, hammasi OK bo'lsa Instagram; ikkalasi bo'sh = tayyor
-        return checkable_missing or noncheckable_missing
+        # Barcha bajarilmagan kanallar birga (Telegram + Instagram) - bitta ekranda
+        return checkable_missing + noncheckable_missing
 
     async def _get_channels_cached(self):
         """Get channels with cache"""
