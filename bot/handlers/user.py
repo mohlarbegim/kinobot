@@ -92,28 +92,31 @@ async def get_bot_username(bot: Bot) -> str:
 
 async def send_movie_or_notice(target, movie, caption, reply_markup=None):
     """
-    Kino videosini yuboradi. Agar file_id bo'sh bo'lsa (video hali yuklanmagan -
-    admin videosiz qo'shgan), video o'rniga matnli xabar yuboradi (crash bo'lmaydi).
+    Kinoni yuboradi. Poster (rasm) bo'lsa DOIM ko'rsatiladi:
+      - poster + video  -> avval poster (ma'lumot + tugmalar), keyin video (tomosha uchun)
+      - faqat video     -> video (ma'lumot + tugmalar)
+      - faqat poster    -> poster (ma'lumot + tugmalar)
+      - hech biri       -> matnli xabar (crash bo'lmaydi)
 
-    protect_content=True: foydalanuvchi videoni boshqa chatga forward qila olmaydi
-    va yuklab (save) tarqata olmaydi (kontent himoyasi).
+    protect_content=True: forward/yuklab tarqatishдан himoya (video ham, poster ham).
 
-    target: Message yoki callback.message (ikkalasida ham answer_video/answer bor).
+    target: Message yoki callback.message (answer_video/answer_photo/answer mavjud).
     """
-    if movie.file_id:
-        await target.answer_video(
-            video=movie.file_id,
-            caption=caption,
-            reply_markup=reply_markup,
-            protect_content=True,
-        )
-    elif movie.thumbnail_file_id:
-        # Video yo'q, lekin poster rasm bor -> posterni ko'rsatamiz
+    poster = movie.thumbnail_file_id
+    video = movie.file_id
+
+    if poster and video:
         await target.answer_photo(
-            photo=movie.thumbnail_file_id,
-            caption=caption,
-            reply_markup=reply_markup,
-            protect_content=True,
+            photo=poster, caption=caption, reply_markup=reply_markup, protect_content=True,
+        )
+        await target.answer_video(video=video, protect_content=True)
+    elif video:
+        await target.answer_video(
+            video=video, caption=caption, reply_markup=reply_markup, protect_content=True,
+        )
+    elif poster:
+        await target.answer_photo(
+            photo=poster, caption=caption, reply_markup=reply_markup, protect_content=True,
         )
     else:
         await target.answer(
@@ -533,27 +536,17 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
     # Kino yuborish
     try:
         cap = f"🎬 <b>{esc(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>"
-        if movie.file_id:
-            await bot.send_video(
-                chat_id=callback.from_user.id,
-                video=movie.file_id,
-                caption=cap,
-                reply_markup=movie_action_kb(movie.code, is_saved, movie.likes, is_liked),
-                protect_content=True,
-            )
+        kb = movie_action_kb(movie.code, is_saved, movie.likes, is_liked)
+        uid = callback.from_user.id
+        if movie.thumbnail_file_id and movie.file_id:
+            await bot.send_photo(chat_id=uid, photo=movie.thumbnail_file_id, caption=cap, reply_markup=kb, protect_content=True)
+            await bot.send_video(chat_id=uid, video=movie.file_id, protect_content=True)
+        elif movie.file_id:
+            await bot.send_video(chat_id=uid, video=movie.file_id, caption=cap, reply_markup=kb, protect_content=True)
         elif movie.thumbnail_file_id:
-            await bot.send_photo(
-                chat_id=callback.from_user.id,
-                photo=movie.thumbnail_file_id,
-                caption=cap,
-                reply_markup=movie_action_kb(movie.code, is_saved, movie.likes, is_liked),
-                protect_content=True,
-            )
+            await bot.send_photo(chat_id=uid, photo=movie.thumbnail_file_id, caption=cap, reply_markup=kb, protect_content=True)
         else:
-            await callback.message.answer(
-                f"{cap}\n\n⚠️ Video fayl topilmadi.",
-                reply_markup=movie_action_kb(movie.code, is_saved, movie.likes, is_liked)
-            )
+            await callback.message.answer(f"{cap}\n\n⚠️ Video fayl topilmadi.", reply_markup=kb)
     except TelegramBadRequest as e:
         await callback.answer(f"❌ Xatolik: Video yuborib bo'lmadi.", show_alert=True)
         return

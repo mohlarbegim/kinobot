@@ -119,8 +119,8 @@ class TestMovieManagement:
         from unittest.mock import AsyncMock
         from bot.handlers.user import send_movie_or_notice
 
-        tgt = SimpleNamespace(answer=AsyncMock(), answer_video=AsyncMock())
-        movie = SimpleNamespace(file_id='BAAC_movie')
+        tgt = SimpleNamespace(answer=AsyncMock(), answer_video=AsyncMock(), answer_photo=AsyncMock())
+        movie = SimpleNamespace(file_id='BAAC_movie', thumbnail_file_id='')
         await send_movie_or_notice(tgt, movie, "Caption")
         assert tgt.answer_video.call_args.kwargs.get('protect_content') is True
 
