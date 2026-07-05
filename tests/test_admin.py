@@ -364,3 +364,19 @@ class TestMessageTemplates:
         # @sync_to_async ostidagi asl sync funksiya
         result = get_message_text.func('payment_rejected', reason='sabab')
         assert result == 'Rad etildi: sabab'
+
+    def test_render_single_pass_no_reinjection(self):
+        """Qiymat ichidagi {boshqa_key} qayta kengaytirilmasligi kerak (bitta o'tish)"""
+        from apps.core.models import MessageTemplate
+
+        out = MessageTemplate._render(
+            'Ism: {full_name}, Kod: {referral_code}',
+            {'full_name': '{referral_code}', 'referral_code': 'MAXFIY'},
+        )
+        assert out == 'Ism: {referral_code}, Kod: MAXFIY'
+
+    def test_render_unknown_placeholder_left_literal(self):
+        """Uzatilmagan {key} o'zgarishsiz qoladi (KeyError bermaydi)"""
+        from apps.core.models import MessageTemplate
+        out = MessageTemplate._render('A {x} B {y}', {'x': '1'})
+        assert out == 'A 1 B {y}'

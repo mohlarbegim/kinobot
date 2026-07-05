@@ -106,15 +106,28 @@ class MessageTemplate(models.Model):
     def __str__(self):
         return f"{self.get_message_type_display()}"
 
+    @staticmethod
+    def _render(content: str, kwargs: dict) -> str:
+        """{placeholder}'larni BITTA o'tishда almashtirish.
+
+        Ketma-ket str.replace ishlatilsa, qiymat ichidagi literal {boshqa_key}
+        keyingi almashtirishда qayta kengaytirilardi (masalan foydalanuvchi ismi
+        "{referral_code}" bo'lsa). re.sub bitta o'tishда almashtiradi -> qiymatlar
+        qayta skanerlanmaydi. Noma'lum {key} o'zgarishsiz qoladi.
+        """
+        import re
+        return re.sub(
+            r'\{(\w+)\}',
+            lambda m: str(kwargs[m.group(1)]) if m.group(1) in kwargs else m.group(0),
+            content,
+        )
+
     @classmethod
     def get_message(cls, message_type: str, **kwargs) -> str:
         """Xabarni olish va formatlash"""
         try:
             template = cls.objects.get(message_type=message_type)
-            content = template.content
-            for key, value in kwargs.items():
-                content = content.replace(f'{{{key}}}', str(value))
-            return content
+            return cls._render(template.content, kwargs)
         except cls.DoesNotExist:
             return cls._get_default_message(message_type, **kwargs)
 
@@ -140,9 +153,7 @@ class MessageTemplate(models.Model):
             'maintenance': '🔧 Bot texnik ishlar sababli vaqtincha to\'xtatilgan.',
         }
         content = defaults.get(message_type, 'Xabar topilmadi')
-        for key, value in kwargs.items():
-            content = content.replace(f'{{{key}}}', str(value))
-        return content
+        return cls._render(content, kwargs)
 
     @classmethod
     def init_defaults(cls):

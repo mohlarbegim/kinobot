@@ -1583,6 +1583,15 @@ async def add_channel_input(message: Message, state: FSMContext, bot: Bot):
             username = parts[-1] if parts else ""
             invite_link = text if text.startswith("http") else f"https://instagram.com/{username}"
 
+            # Dublikat oldini olish (channel_id yo'q -> havola bo'yicha tekshiramiz)
+            if await check_channel_link_exists(invite_link):
+                await message.answer(
+                    "❌ Bu havola allaqachon qo'shilgan!",
+                    reply_markup=cancel_inline_kb()
+                )
+                await state.clear()
+                return
+
             # Havolani saqlab, ko'rinadigan NOM so'raymiz. Foydalanuvchilar shu nomni
             # ko'radi - Instagram ekani va username bilinmasligi uchun oddiy nom.
             await state.update_data(channel_id=None, username=username, invite_link=invite_link)
@@ -1788,6 +1797,14 @@ async def add_channel_name(message: Message, state: FSMContext):
         )
         return
 
+    # Channel.title max_length=255 - oshib ketsa DataError (FSM tiqilib qolardi)
+    if len(title) > 255:
+        await message.answer(
+            "❌ Nom juda uzun (255 belgidan ko'p). Qisqaroq nom kiriting:",
+            reply_markup=cancel_inline_kb()
+        )
+        return
+
     data = await state.get_data()
     channel_type = data.get('channel_type', 'instagram')
 
@@ -1808,9 +1825,9 @@ async def add_channel_name(message: Message, state: FSMContext):
 
     await message.answer(
         f"✅ <b>Qo'shildi!</b>\n\n"
-        f"📢 {title}\n"
-        f"🔗 {data.get('invite_link', '')}\n\n"
-        f"ℹ️ Foydalanuvchilar «{title}» nomini ko'radi.",
+        f"📢 {esc(title)}\n"
+        f"🔗 {esc(data.get('invite_link', ''))}\n\n"
+        f"ℹ️ Foydalanuvchilar «{esc(title)}» nomini ko'radi.",
         reply_markup=kb
     )
 
@@ -3271,6 +3288,13 @@ def check_channel_exists(channel_id: int) -> bool:
     """Kanal mavjudligini tekshirish"""
     from apps.channels.models import Channel
     return Channel.objects.filter(channel_id=channel_id).exists()
+
+
+@sync_to_async
+def check_channel_link_exists(invite_link: str) -> bool:
+    """Havola bo'yicha kanal mavjudligini tekshirish (Instagram/tashqi - channel_id yo'q)."""
+    from apps.channels.models import Channel
+    return Channel.objects.filter(invite_link=invite_link).exists()
 
 
 @sync_to_async

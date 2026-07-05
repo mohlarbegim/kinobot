@@ -308,7 +308,7 @@ class ChannelViewSet(viewsets.ModelViewSet):
 
         channel = self.get_object()
 
-        if channel.channel_type not in ('telegram_channel', 'telegram_group'):
+        if channel.channel_type not in Channel.CHECKABLE_TYPES:
             return Response({
                 'checkable': False,
                 'can_check': False,

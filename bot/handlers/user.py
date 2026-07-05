@@ -1578,20 +1578,26 @@ async def check_subscription(bot: Bot, user_id: int) -> list:
 
     for channel in channels:
         if channel.is_checkable:
+            # FAQAT get_chat_member (Telegram) xatosi fail-open. DB lookup (join request)
+            # try'dan TASHQARIDA - DB uzilishida hamma gate'dan o'tib ketmasligi uchun.
             try:
                 member = await bot.get_chat_member(channel.channel_id, user_id)
-                if member.status in ['left', 'kicked']:
-                    # A'zo emas - lekin yopiq kanalga qo'shilish so'rovi yuborgan bo'lishi mumkin
-                    if requested_ids is None:
-                        requested_ids = await get_join_requested_ids(user_id)
-                    if channel.id not in requested_ids:
-                        checkable_missing.append(channel)
+                status = member.status
             except TelegramBadRequest as e:
                 # Bot kanalni tekshira olmadi (admin emas / kanal topilmadi) -> foydalanuvchini
                 # BLOKLAMAYMIZ (fail-open), aks holda bitta noto'g'ri kanal hammani qulflaydi.
                 logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
+                continue
             except Exception as e:
                 logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
+                continue
+
+            if status in ['left', 'kicked']:
+                # A'zo emas - lekin yopiq kanalga qo'shilish so'rovi yuborgan bo'lishi mumkin
+                if requested_ids is None:
+                    requested_ids = await get_join_requested_ids(user_id)
+                if channel.id not in requested_ids:
+                    checkable_missing.append(channel)
         else:
             # Instagram / bot / tashqi - tasdiq (ikki tashrif) orqali
             if confirmed_ids is None:

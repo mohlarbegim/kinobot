@@ -102,20 +102,27 @@ class SubscriptionMiddleware(BaseMiddleware):
 
         for channel in channels:
             if channel.is_checkable:
+                # FAQAT get_chat_member (Telegram) xatosi fail-open bo'ladi. DB lookup
+                # (get_join_requested_ids) try'dan TASHQARIDA - DB xatosi fail-open
+                # qilmasligi kerak (aks holda DB uzilishida hamma gate'dan o'tib ketardi;
+                # non-checkable shoxidagi get_confirmed_channel_ids ham propagate qiladi).
                 try:
                     member = await bot.get_chat_member(channel.channel_id, user_id)
-                    if member.status in ['left', 'kicked']:
-                        if requested_ids is None:
-                            requested_ids = await get_join_requested_ids(user_id)
-                        if channel.id not in requested_ids:
-                            checkable_missing.append(channel)
+                    status = member.status
                 except TelegramBadRequest as e:
-                    # Bot kanalni tekshira olmadi (admin emas / topilmadi) -> fail-open (o'tkazamiz),
-                    # lekin admin sozlamani tuzatishi uchun warning log yozamiz.
+                    # Bot kanalni tekshira olmadi (admin emas / topilmadi) -> fail-open.
                     logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
+                    continue
                 except Exception as e:
                     # TelegramForbiddenError ("bot is not a member...") va boshqalar ham fail-open.
                     logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
+                    continue
+
+                if status in ['left', 'kicked']:
+                    if requested_ids is None:
+                        requested_ids = await get_join_requested_ids(user_id)
+                    if channel.id not in requested_ids:
+                        checkable_missing.append(channel)
             else:
                 # Instagram / bot / tashqi - tasdiq (ikki tashrif) orqali
                 if confirmed_ids is None:
