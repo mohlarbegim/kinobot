@@ -2,7 +2,7 @@ import random
 import logging
 from aiogram import Router, F, Bot
 from aiogram.filters import CommandStart, Command, StateFilter
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ChatJoinRequest
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ChatJoinRequest, ChatMemberUpdated
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
@@ -20,7 +20,7 @@ from bot.keyboards import (
     search_filter_kb, filter_country_kb, filter_language_kb, filter_year_kb,
     flash_sale_tariffs_kb, filter_movies_kb
 )
-from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, esc
+from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, remove_channel_membership, esc
 from apps.payments.models import PendingPaymentSession
 from datetime import timedelta
 from django.utils import timezone as dj_timezone
@@ -247,6 +247,32 @@ async def on_chat_join_request(request: ChatJoinRequest):
 
     await record_join_request(request.from_user.id, channel.id)
     clear_subscription_cache(request.from_user.id)
+
+
+@router.chat_member()
+async def on_chat_member_update(update: ChatMemberUpdated):
+    """
+    Majburiy kanaldagi foydalanuvchi a'zoligi o'zgarsa (bot admin bo'lsa keladi).
+
+    Kanaldan chiqib ketsa (left/kicked) - uning shu kanalga oid qo'shilish so'rovi
+    va obuna yozuvlari o'chiriladi, cache tozalanadi. Shunda keyingi harakatida bot
+    QAYTA obuna so'raydi. (Instagram/tashqi kanallar bu yerda kelmaydi - ular uchun
+    chiqishni aniqlab bo'lmaydi.)
+    """
+    from bot.middlewares.subscription import clear_subscription_cache
+
+    channel = await get_channel_by_tg_id(update.chat.id)
+    if not channel:
+        return  # bizning majburiy kanalimiz emas
+
+    user_id = update.new_chat_member.user.id
+    new_status = update.new_chat_member.status
+
+    if new_status in ('left', 'kicked'):
+        await remove_channel_membership(user_id, channel.id)
+
+    # Har qanday o'zgarishda cache'ni yangilaymiz (chiqqan/qo'shilganini darhol aks ettirish)
+    clear_subscription_cache(user_id)
 
 
 @router.callback_query(F.data == "check_subscription")

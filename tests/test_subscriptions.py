@@ -283,6 +283,51 @@ class TestChannelJoinRequest:
         ch.delete(); user.delete()
 
 
+class TestLeaveReasksSubscription:
+    """Kanaldan chiqib ketsa yozuvlar o'chadi -> keyingi tekshiruvda qayta obuna so'raladi"""
+
+    @pytest.mark.asyncio
+    async def test_remove_channel_membership_clears_records(self, user_model, channel_model):
+        from asgiref.sync import sync_to_async
+        from apps.channels.models import ChannelJoinRequest, ChannelSubscription
+        from bot.utils.helpers import remove_channel_membership
+
+        uid = 505050501
+
+        @sync_to_async
+        def setup():
+            u = user_model.objects.create(user_id=uid, username='lv', full_name='LV')
+            ch = channel_model.objects.create(
+                channel_id=-100777888, title='Yopiq', channel_type='telegram_channel',
+                invite_link='https://t.me/+q', is_active=True,
+            )
+            ChannelJoinRequest.objects.create(channel=ch, user=u)
+            ChannelSubscription.objects.create(channel=ch, user=u)
+            return u, ch
+
+        @sync_to_async
+        def counts(u, ch):
+            return (
+                ChannelJoinRequest.objects.filter(channel=ch, user=u).count(),
+                ChannelSubscription.objects.filter(channel=ch, user=u).count(),
+            )
+
+        @sync_to_async
+        def teardown(u, ch):
+            ch.delete(); u.delete()
+
+        u, ch = await setup()
+        assert await counts(u, ch) == (1, 1)
+
+        # Kanaldan chiqqanda chaqiriladigan helper
+        await remove_channel_membership(uid, ch.id)
+
+        # Yozuvlar o'chdi -> endi kanal "bajarilmagan" bo'lib qaytadi (qayta so'raladi)
+        assert await counts(u, ch) == (0, 0)
+
+        await teardown(u, ch)
+
+
 class TestChannelsKeyboard:
     """channels_kb - faqat havola tugmalari + «Tekshirish» (tasdiq tugmasi YO'Q)"""
 

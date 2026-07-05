@@ -204,6 +204,24 @@ def get_join_requested_ids(user_id: int) -> set:
 
 
 @sync_to_async
+def remove_channel_membership(user_id: int, channel_pk: int):
+    """
+    Foydalanuvchi kanaldan chiqib ketganda (left/kicked) uning shu kanalga oid
+    qo'shilish so'rovi va obuna yozuvlarini o'chiradi.
+
+    Shundan so'ng keyingi tekshiruvda kanal "bajarilmagan" bo'lib qaytadi va bot
+    qayta obuna so'raydi (chat_member update orqali chaqiriladi).
+    """
+    from apps.channels.models import ChannelJoinRequest, ChannelSubscription
+    try:
+        user = User.objects.get(user_id=user_id)
+    except User.DoesNotExist:
+        return
+    ChannelJoinRequest.objects.filter(channel_id=channel_pk, user=user).delete()
+    ChannelSubscription.objects.filter(channel_id=channel_pk, user=user).delete()
+
+
+@sync_to_async
 def get_channel_subscription_count(channel_pk: int) -> int:
     """Kanal obunachilari sonini olish"""
     from apps.channels.models import ChannelSubscription
