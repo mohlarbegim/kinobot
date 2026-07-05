@@ -1203,15 +1203,15 @@ async def flash_tariff_callback(callback: CallbackQuery, db_user: User = None):
         await callback.answer("❌ Tarif topilmadi!", show_alert=True)
         return
 
-    # Narxni hisoblash
+    # Narxni hisoblash - narx HECH QACHON oshmaydi (2x olib tashlandi)
     if is_discount and db_user and db_user.is_flash_sale_active:
-        # Chegirmali narx (hozirgi narx)
+        # Flash sale aktiv - "chegirmali" deb ko'rsatamiz (urgency)
         price = tariff.price
         price_text = f"{price:,} so'm (chegirmali!)"
         with_discount = True
     else:
-        # 2x narx
-        price = tariff.price * 2
+        # Flash sale tugadi/o'chiq - o'sha qo'yilgan narx (oshmaydi)
+        price = tariff.price
         price_text = f"{price:,} so'm"
         with_discount = False
 

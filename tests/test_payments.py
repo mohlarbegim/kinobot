@@ -136,13 +136,27 @@ class TestFlashSale:
         )
         assert user.is_flash_sale_active is False
 
-    def test_price_calculation(self, db_tariff):
-        """Test price calculation"""
-        flash_price = db_tariff.discounted_price
-        assert flash_price == 5000
+    def test_flash_sale_price_not_doubled(self, db_tariff):
+        """Flash sale tugagach ham narx OSHMASLIGI kerak (2x olib tashlandi)"""
+        from bot.keyboards import flash_sale_tariffs_kb
 
-        after_flash = db_tariff.price * 2
-        assert after_flash == 20000
+        # is_discount=False -> flash sale tugagan/o'chiq holat
+        kb = flash_sale_tariffs_kb([db_tariff], is_discount=False)
+        joined = " ".join(b.text for row in kb.inline_keyboard for b in row)
+
+        # Narx = qo'yilgan narx (10,000), 2x (20,000) EMAS
+        assert f"{db_tariff.price:,}" in joined
+        assert f"{db_tariff.price * 2:,}" not in joined
+
+    def test_flash_sale_active_price_not_doubled(self, db_tariff):
+        """Flash sale aktiv holatda ham narx qo'yilgan narx"""
+        from bot.keyboards import flash_sale_tariffs_kb
+
+        kb = flash_sale_tariffs_kb([db_tariff], is_discount=True)
+        joined = " ".join(b.text for row in kb.inline_keyboard for b in row)
+
+        assert f"{db_tariff.price:,}" in joined
+        assert f"{db_tariff.price * 2:,}" not in joined
 
 
 class TestPaymentFlow:

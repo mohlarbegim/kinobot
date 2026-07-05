@@ -216,7 +216,7 @@ def tariffs_kb(tariffs: list, with_discount: bool = False) -> InlineKeyboardMark
 
 
 def flash_sale_tariffs_kb(tariffs: list, is_discount: bool = True) -> InlineKeyboardMarkup:
-    """Flash sale tariflar - 3 daqiqa ichida chegirma, keyin 2x narx"""
+    """Flash sale tariflar - taymer urgency, lekin narx OSHMAYDI (doim qo'yilgan narx)"""
     builder = InlineKeyboardBuilder()
 
     for tariff in tariffs:
@@ -231,9 +231,8 @@ def flash_sale_tariffs_kb(tariffs: list, is_discount: bool = True) -> InlineKeyb
                 callback_data=f"flash_tariff:{tariff.id}:1"
             ))
         else:
-            # 2x narx (chegirma tugadi)
-            doubled_price = original_price * 2
-            text = f"💎 {tariff.name} • {doubled_price:,} so'm"
+            # Flash sale tugadi - narx OSHMAYDI, qo'yilgan narx (2x olib tashlandi)
+            text = f"💎 {tariff.name} • {original_price:,} so'm"
             builder.row(InlineKeyboardButton(
                 text=text,
                 callback_data=f"flash_tariff:{tariff.id}:0"
