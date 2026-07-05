@@ -12,7 +12,7 @@ from apps.movies.models import Movie, Category
 from apps.payments.models import Payment, Tariff
 from apps.core.models import Broadcast
 from bot.filters import IsAdmin, CanAddMovies, CanBroadcast, CanManageUsers, CanManagePayments, IsSuperAdmin
-from bot.states import AddMovieState, BroadcastState, AddChannelState, EditSettingsState, EditMessageState, UserSearchState, AddCategoryState, EditCategoryState, AddTariffState, EditTariffState
+from bot.states import AddMovieState, EditMovieState, BroadcastState, AddChannelState, EditSettingsState, EditMessageState, UserSearchState, AddCategoryState, EditCategoryState, AddTariffState, EditTariffState
 from bot.keyboards import (
     admin_categories_kb, movie_quality_kb, movie_language_kb, movie_country_kb,
     broadcast_target_kb, broadcast_ad_kb, confirm_broadcast_kb,
@@ -244,6 +244,7 @@ async def admin_movie_view(callback: CallbackQuery):
     premium_text = "🆓 Oddiy qilish" if movie.is_premium else "💎 Premium qilish"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"admin:movie_edit:{movie.code}")],
         [InlineKeyboardButton(text=toggle_text, callback_data=f"admin:movie_toggle:{movie.code}")],
         [InlineKeyboardButton(text=premium_text, callback_data=f"admin:movie_premium:{movie.code}")],
         [InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"admin:movie_delete:{movie.code}")],
@@ -307,6 +308,214 @@ async def admin_movie_delete_confirm(callback: CallbackQuery):
         await callback.message.edit_text("✅ Kino muvaffaqiyatli o'chirildi!", reply_markup=kb)
     else:
         await callback.answer("❌ Xatolik yuz berdi!", show_alert=True)
+
+
+# ==================== KINO TAHRIRLASH ====================
+
+_MEDIT_FIELD_LABELS = {
+    'title': 'Nom',
+    'video': 'Video',
+    'category': 'Janr',
+    'year': 'Yil',
+    'description': 'Tavsif',
+    'code': 'Kod',
+}
+
+
+@router.callback_query(F.data.startswith("admin:movie_edit:"), IsAdmin())
+async def admin_movie_edit_menu(callback: CallbackQuery, state: FSMContext):
+    """Kino tahrirlash menyusi — qaysi maydonni o'zgartirish tanlanadi."""
+    await state.clear()
+    code = callback.data.split(":", 2)[2]
+    movie = await get_movie_by_code(code)
+    if not movie:
+        await callback.answer("❌ Kino topilmadi", show_alert=True)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Nom", callback_data=f"admin:medit:title:{code}")],
+        [InlineKeyboardButton(text="🎬 Video", callback_data=f"admin:medit:video:{code}")],
+        [InlineKeyboardButton(text="🎭 Janr", callback_data=f"admin:medit:category:{code}")],
+        [InlineKeyboardButton(text="📅 Yil", callback_data=f"admin:medit:year:{code}")],
+        [InlineKeyboardButton(text="📖 Tavsif", callback_data=f"admin:medit:description:{code}")],
+        [InlineKeyboardButton(text="🔢 Kod", callback_data=f"admin:medit:code:{code}")],
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"admin:movie_view:{code}")],
+    ])
+    await callback.message.edit_text(
+        f"✏️ <b>{esc(movie.display_title)}</b>\n📝 Kod: <code>{movie.code}</code>\n\n"
+        "Qaysi maydonni tahrirlaymiz?",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:medit:"), IsAdmin())
+async def admin_movie_edit_field(callback: CallbackQuery, state: FSMContext):
+    """Tahrirlash maydonini tanlash — matn/video so'raladi yoki janr klaviaturasi ko'rsatiladi."""
+    # admin:medit:<field>:<code>
+    parts = callback.data.split(":")
+    field = parts[2]
+    code = parts[3]
+
+    if field not in _MEDIT_FIELD_LABELS:
+        await callback.answer("❌ Noma'lum maydon", show_alert=True)
+        return
+
+    movie = await get_movie_by_code(code)
+    if not movie:
+        await callback.answer("❌ Kino topilmadi", show_alert=True)
+        return
+
+    await state.update_data(edit_code=code, edit_field=field)
+    await state.set_state(EditMovieState.value)
+
+    if field == 'category':
+        categories = await get_categories()
+        rows = [[InlineKeyboardButton(text=(c.name), callback_data=f"medit_cat:{c.id}")] for c in categories]
+        rows.append([InlineKeyboardButton(text="🚫 Janrsiz", callback_data="medit_cat:none")])
+        rows.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")])
+        await callback.message.edit_text(
+            f"🎭 <b>{esc(movie.display_title)}</b> uchun yangi janrni tanlang:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        )
+    elif field == 'video':
+        await callback.message.edit_text(
+            f"🎬 <b>{esc(movie.display_title)}</b> uchun yangi <b>video</b> faylini yuboring:",
+            reply_markup=cancel_inline_kb()
+        )
+    else:
+        prompts = {
+            'title': "📝 Yangi nomni kiriting:",
+            'year': "📅 Yangi yilni kiriting (masalan: 2020):",
+            'description': "📖 Yangi tavsifni kiriting:",
+            'code': "🔢 Yangi kodni kiriting (faqat raqam):",
+        }
+        await callback.message.edit_text(
+            f"<b>{esc(movie.display_title)}</b>\n\n{prompts[field]}",
+            reply_markup=cancel_inline_kb()
+        )
+    await callback.answer()
+
+
+def _medit_result_kb(code: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Yana tahrirlash", callback_data=f"admin:movie_edit:{code}")],
+        [InlineKeyboardButton(text="🎬 Kinoga qaytish", callback_data=f"admin:movie_view:{code}")],
+    ])
+
+
+@router.callback_query(EditMovieState.value, F.data.startswith("medit_cat:"), IsAdmin())
+async def admin_movie_edit_category(callback: CallbackQuery, state: FSMContext):
+    """Yangi janrni saqlash."""
+    data = await state.get_data()
+    code = data.get('edit_code')
+    cat_raw = callback.data.split(":")[1]
+    category_id = None if cat_raw == "none" else int(cat_raw)
+
+    movie, err = await edit_movie_field(code, 'category_id', category_id)
+    await state.clear()
+    if err or not movie:
+        await callback.answer("❌ Kino topilmadi", show_alert=True)
+        return
+    cat_name = movie.category.name if movie.category else "Janrsiz"
+    await callback.message.edit_text(
+        f"✅ Janr yangilandi: <b>{esc(cat_name)}</b>",
+        reply_markup=_medit_result_kb(movie.code)
+    )
+    await callback.answer("✅ Saqlandi!")
+
+
+@router.message(EditMovieState.value, F.video | F.document)
+async def admin_movie_edit_video(message: Message, state: FSMContext):
+    """Yangi videoni saqlash."""
+    data = await state.get_data()
+    code = data.get('edit_code')
+    field = data.get('edit_field')
+    if field != 'video':
+        await message.answer("❌ Bu bosqichda matn kiriting.", reply_markup=cancel_inline_kb())
+        return
+
+    if message.video:
+        file_id = message.video.file_id
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith('video/'):
+        file_id = message.document.file_id
+    else:
+        await message.answer("❌ Faqat video fayl yuboring.", reply_markup=cancel_inline_kb())
+        return
+
+    movie, err = await edit_movie_field(code, 'file_id', file_id)
+    await state.clear()
+    if err or not movie:
+        await message.answer("❌ Kino topilmadi.")
+        return
+    await message.answer("✅ Video yangilandi!", reply_markup=_medit_result_kb(movie.code))
+
+
+@router.message(EditMovieState.value, F.text)
+async def admin_movie_edit_text(message: Message, state: FSMContext):
+    """Matnli maydonlarni (nom/yil/tavsif/kod) saqlash."""
+    data = await state.get_data()
+    code = data.get('edit_code')
+    field = data.get('edit_field')
+    if not code or not field:
+        await state.clear()
+        return
+
+    val = message.text.strip()
+
+    if field == 'year':
+        if not val.isdigit() or not (1900 <= int(val) <= 2100):
+            await message.answer("❌ Yil noto'g'ri (1900-2100 oralig'ida raqam).", reply_markup=cancel_inline_kb())
+            return
+        value = int(val)
+    elif field == 'code':
+        if not val.isdigit():
+            await message.answer("❌ Kod faqat raqam bo'lishi kerak.", reply_markup=cancel_inline_kb())
+            return
+        value = val
+    elif field == 'title':
+        if not val or len(val) > 255:
+            await message.answer("❌ Nom 1-255 belgidan iborat bo'lishi kerak.", reply_markup=cancel_inline_kb())
+            return
+        value = val
+    elif field == 'description':
+        if len(val) > 2000:
+            await message.answer("❌ Tavsif juda uzun (max 2000 belgi).", reply_markup=cancel_inline_kb())
+            return
+        value = val
+    else:
+        await state.clear()
+        return
+
+    movie, err = await edit_movie_field(code, field, value)
+    if err == 'duplicate':
+        await message.answer(
+            f"❌ <code>{esc(val)}</code> kodi band. Boshqa kod kiriting:",
+            reply_markup=cancel_inline_kb()
+        )
+        return
+    if err or not movie:
+        await state.clear()
+        await message.answer("❌ Kino topilmadi.")
+        return
+
+    await state.clear()
+    label = _MEDIT_FIELD_LABELS.get(field, field)
+    await message.answer(f"✅ {label} yangilandi!", reply_markup=_medit_result_kb(movie.code))
+
+
+@router.message(EditMovieState.value)
+async def admin_movie_edit_invalid(message: Message, state: FSMContext):
+    """Kutilmagan turdagi xabar (masalan video bosqichida rasm) — tushunarli xato."""
+    data = await state.get_data()
+    field = data.get('edit_field')
+    if field == 'video':
+        await message.answer(
+            "❌ Bu yerga <b>video</b> kerak, rasm emas. Video fayl yuboring.",
+            reply_markup=cancel_inline_kb()
+        )
+    else:
+        await message.answer("❌ Iltimos matn kiriting.", reply_markup=cancel_inline_kb())
 
 
 @router.callback_query(F.data == "admin:movies_stats", IsAdmin())
@@ -489,6 +698,23 @@ async def add_movie_video_skip(callback: CallbackQuery, state: FSMContext):
             reply_markup=movie_quality_kb()
         )
     await callback.answer()
+
+
+@router.message(AddMovieState.video)
+async def add_movie_video_invalid(message: Message, state: FSMContext):
+    """Video bosqichida video EMAS narsa (rasm/matn/stiker) yuborilsa tushunarli xato.
+    Ilgari hech narsa bo'lmasdi (jimgina o'tib ketardi) — 'rasm yuborib bo'lmayapti'."""
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ Videosiz o'tkazib yuborish", callback_data="video:skip")],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")]
+    ])
+    await message.answer(
+        "❌ Bu yerga <b>video</b> kerak, rasm emas.\n\n"
+        "🎬 Iltimos kino <b>video</b> faylini yuboring "
+        "(yoki «⏭ Videosiz o'tkazib yuborish»ni bosing).",
+        reply_markup=kb
+    )
 
 
 @router.callback_query(AddMovieState.category, F.data.startswith("admin_category:"))
@@ -2309,12 +2535,13 @@ async def settings_menu_callback(callback: CallbackQuery):
     referral = f"✅ +{settings.referral_bonus} kun" if settings.referral_active else "❌ O'chirilgan"
 
     # Chegirma vaqtini formatlash
-    discount_mins = settings.discount_duration // 60
-    discount_secs = settings.discount_duration % 60
-    if discount_secs > 0:
-        discount_time = f"{discount_mins} daqiqa {discount_secs} sekund"
+    _total = settings.discount_duration
+    if _total < 60:
+        discount_time = f"{_total} sekund"
     else:
-        discount_time = f"{discount_mins} daqiqa"
+        discount_mins = _total // 60
+        discount_secs = _total % 60
+        discount_time = f"{discount_mins} daqiqa" + (f" {discount_secs} sekund" if discount_secs else "")
 
     text = (
         "⚙️ <b>Bot sozlamalari</b>\n\n"
@@ -2595,12 +2822,12 @@ async def edit_discount_percent_save(message: Message, state: FSMContext):
 async def edit_discount_duration_start(callback: CallbackQuery, state: FSMContext):
     """Chegirma muddatini o'zgartirish"""
     settings = await get_bot_settings()
-    current_mins = settings.discount_duration // 60
+    current = settings.discount_duration
     await state.set_state(EditSettingsState.discount_duration)
     await callback.message.edit_text(
-        f"⏱ <b>Chegirma muddatini kiriting (daqiqada):</b>\n\n"
-        f"Hozirgi: <code>{current_mins}</code> daqiqa\n\n"
-        f"1 dan 60 gacha son kiriting:",
+        f"⏱ <b>Chegirma muddatini kiriting (soniyada):</b>\n\n"
+        f"Hozirgi: <code>{current}</code> soniya\n\n"
+        f"10 dan 3600 gacha son kiriting (masalan: <code>30</code>):",
         reply_markup=cancel_inline_kb()
     )
     await callback.answer()
@@ -2608,22 +2835,20 @@ async def edit_discount_duration_start(callback: CallbackQuery, state: FSMContex
 
 @router.message(EditSettingsState.discount_duration, F.text, IsSuperAdmin())
 async def edit_discount_duration_save(message: Message, state: FSMContext):
-    """Chegirma muddatini saqlash"""
+    """Chegirma muddatini saqlash (soniyada — web dashboard bilan bir xil birlik)"""
     try:
-        minutes = int(message.text.strip())
-        if minutes < 1 or minutes > 60:
+        duration_seconds = int(message.text.strip())
+        if duration_seconds < 10 or duration_seconds > 3600:
             raise ValueError()
     except ValueError:
         await message.answer(
             "❌ Noto'g'ri format!\n\n"
-            "1 dan 60 gacha son kiriting.\n"
-            "Masalan: <code>3</code> (3 daqiqa)",
+            "10 dan 3600 gacha son kiriting.\n"
+            "Masalan: <code>30</code> (30 soniya)",
             reply_markup=cancel_inline_kb()
         )
         return
 
-    # Daqiqani sekundga aylantirish
-    duration_seconds = minutes * 60
     await update_bot_setting('discount_duration', duration_seconds)
     await state.clear()
 
@@ -2634,7 +2859,7 @@ async def edit_discount_duration_save(message: Message, state: FSMContext):
 
     await message.answer(
         f"✅ <b>Chegirma muddati yangilandi!</b>\n\n"
-        f"Yangi muddat: <code>{minutes}</code> daqiqa",
+        f"Yangi muddat: <code>{duration_seconds}</code> soniya",
         reply_markup=kb
     )
 
@@ -3402,6 +3627,30 @@ def delete_movie(code: str) -> bool:
         return True
     except Movie.DoesNotExist:
         return False
+
+
+@sync_to_async
+def edit_movie_field(code: str, field: str, value):
+    """Kino bitta maydonini yangilash. field: title/description/year/file_id/code/category_id.
+    Qaytaradi: (movie yoki None, error yoki None). error: 'not_found' | 'duplicate'."""
+    ALLOWED = {'title', 'description', 'year', 'file_id', 'code', 'category_id'}
+    if field not in ALLOWED:
+        return None, "not_found"
+    try:
+        movie = Movie.objects.select_related('category').get(code=code)
+    except Movie.DoesNotExist:
+        return None, "not_found"
+
+    if field == 'code' and Movie.objects.filter(code=value).exclude(pk=movie.pk).exists():
+        return None, "duplicate"
+
+    setattr(movie, field, value)
+    # FK uchun update_fields'da model maydon nomi ('category') beriladi, ustun emas.
+    save_field = 'category' if field == 'category_id' else field
+    movie.save(update_fields=[save_field])
+    # category tafsilotini yangilab olamiz (natija xabarida ko'rsatish uchun)
+    movie = Movie.objects.select_related('category').get(pk=movie.pk)
+    return movie, None
 
 
 @sync_to_async

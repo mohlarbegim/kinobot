@@ -20,7 +20,7 @@ class BotSettings(models.Model):
     # Chegirma
     discount_active = models.BooleanField(default=True, verbose_name='Chegirma aktiv')
     discount_percent = models.PositiveIntegerField(default=50, verbose_name='Chegirma foizi')
-    discount_duration = models.PositiveIntegerField(default=180, verbose_name='Chegirma muddati (sekund)')
+    discount_duration = models.PositiveIntegerField(default=30, verbose_name='Chegirma muddati (sekund)')
 
     # Trial
     free_trial_days = models.PositiveIntegerField(default=7, verbose_name='Bepul kunlar soni')

@@ -68,20 +68,26 @@ class TestUserModel:
         assert 14 <= user.days_left <= 15
 
     def test_flash_sale_active(self, user_model):
-        """Test flash sale active"""
+        """Flash sale oynasi ochiq (langar hozir o'rnatilgan)"""
         user = user_model(
             user_id=555,
-            premium_first_view=timezone.now()
+            flash_sale_started=timezone.now()
         )
         assert user.is_flash_sale_active is True
 
     def test_flash_sale_expired(self, user_model):
-        """Test flash sale expired"""
+        """Flash sale oynasi yopiq (langar 10 daqiqa oldin, muddat 30s)"""
         user = user_model(
             user_id=666,
-            premium_first_view=timezone.now() - timedelta(minutes=10)
+            flash_sale_started=timezone.now() - timedelta(minutes=10)
         )
         assert user.is_flash_sale_active is False
+
+    def test_flash_sale_inactive_without_trigger(self, user_model):
+        """Trigger bo'lmagan (flash_sale_started=None) -> flash sale YO'Q"""
+        user = user_model(user_id=557, flash_sale_started=None)
+        assert user.is_flash_sale_active is False
+        assert user.flash_sale_seconds_left == 0
 
 
 class TestMovieModel:

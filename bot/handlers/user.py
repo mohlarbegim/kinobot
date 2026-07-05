@@ -18,7 +18,7 @@ from bot.keyboards import (
     main_menu_inline_kb, channels_kb, subscription_prompt_text, categories_kb, movies_kb,
     tariffs_kb, back_kb, movie_action_kb, saved_movies_kb,
     search_filter_kb, filter_country_kb, filter_language_kb, filter_year_kb,
-    flash_sale_tariffs_kb, filter_movies_kb
+    flash_sale_tariffs_kb, filter_movies_kb, apply_discount
 )
 from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, remove_channel_membership, get_message_text, compute_missing_channels, esc
 from apps.payments.models import PendingPaymentSession
@@ -405,15 +405,30 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
         )
         return
 
-    # Premium check
+    # Premium check — premium bo'lmagan user premium kino kodini kiritdi.
+    # Bu TRIGGER: 30 soniyalik chegirma taklif qilamiz (urgency).
     if movie.is_premium and not (db_user and db_user.is_premium_active):
-        is_admin = await is_user_admin(user_id)
-        await message.answer(
-            f"💎 <b>{esc(movie.display_title)}</b>\n\n"
-            "Bu kino faqat Premium foydalanuvchilar uchun.\n\n"
-            "Premium olish uchun 💎 Premium tugmasini bosing.",
-            reply_markup=main_menu_inline_kb(is_admin=is_admin)
-        )
+        settings = await get_bot_settings()
+        tariffs = await get_tariffs()
+        if db_user and settings and settings.discount_active and tariffs:
+            await start_flash_sale(db_user.user_id)
+            pct = settings.discount_percent
+            seconds_left = settings.discount_duration
+            await message.answer(
+                f"💎 <b>{esc(movie.display_title)}</b> — bu Premium kino!\n\n"
+                f"🔥 <b>Faqat siz uchun {pct}% CHEGIRMA!</b>\n"
+                f"⏰ <b>Shoshiling! Atigi {seconds_left} soniya amal qiladi.</b>\n\n"
+                "📦 Chegirmali tarifni tanlang:",
+                reply_markup=flash_sale_tariffs_kb(tariffs, is_discount=True, discount_percent=pct)
+            )
+        else:
+            is_admin = await is_user_admin(user_id)
+            await message.answer(
+                f"💎 <b>{esc(movie.display_title)}</b>\n\n"
+                "Bu kino faqat Premium foydalanuvchilar uchun.\n\n"
+                "Premium olish uchun 💎 Premium tugmasini bosing.",
+                reply_markup=main_menu_inline_kb(is_admin=is_admin)
+            )
         return
 
     # Send movie
@@ -1076,40 +1091,28 @@ async def premium_callback(callback: CallbackQuery, db_user: User = None):
         await callback.answer("📭 Tariflar mavjud emas.", show_alert=True)
         return
 
-    # Sozlamalardan chegirma muddatini olish
+    # Flash sale FAQAT trigger orqali ochiladi (premium kod kiritilganda yoki trial
+    # tugagan kuni scheduler push qilganda). Bu yerda faqat oynaning ochiqligini aks
+    # ettiramiz — /premium ochish o'zi flash sale boshlamaydi.
     settings = await get_bot_settings()
-    discount_duration = settings.discount_duration  # sekundda
-
-    # Flash sale - chegirma vaqti ichida
-    is_flash_sale = settings.discount_active
-    seconds_left = discount_duration
-
-    if db_user and settings.discount_active:
-        # Birinchi ko'rishni qayd qilish
-        if not db_user.premium_first_view:
-            await set_premium_first_view(db_user.user_id)
-            is_flash_sale = True
-            seconds_left = discount_duration
-        else:
-            is_flash_sale = db_user.is_flash_sale_active
-            seconds_left = db_user.flash_sale_seconds_left
+    discount_percent = settings.discount_percent
+    is_flash_sale = bool(settings.discount_active and db_user and db_user.is_flash_sale_active)
+    seconds_left = db_user.flash_sale_seconds_left if db_user else 0
 
     if is_flash_sale:
-        minutes = seconds_left // 60
-        secs = seconds_left % 60
-        duration_mins = discount_duration // 60
-        timer_text = f"⏰ <b>CHEGIRMA!</b> Vaqt: {minutes}:{secs:02d}\n\n"
         text = (
-            f"🔥 <b>FLASH SALE!</b> 🔥\n\n"
-            f"{timer_text}"
+            f"🔥 <b>FLASH SALE — {discount_percent}% CHEGIRMA!</b> 🔥\n\n"
+            f"⏰ <b>Shoshiling! Atigi {seconds_left} soniya qoldi.</b>\n\n"
             "💎 <b>Premium afzalliklari:</b>\n\n"
             "✅ Barcha kinolarga kirish\n"
             "✅ Reklamasiz foydalanish\n"
             "✅ Tezkor yuklash\n\n"
-            f"⚡ <b>Shoshiling! Taklif atigi {duration_mins} daqiqa amal qiladi.</b>\n\n"
-            "📦 Tarifni tanlang:"
+            "📦 Chegirmali tarifni tanlang:"
         )
-        await callback.message.edit_text(text, reply_markup=flash_sale_tariffs_kb(tariffs, is_discount=True))
+        await callback.message.edit_text(
+            text,
+            reply_markup=flash_sale_tariffs_kb(tariffs, is_discount=True, discount_percent=discount_percent)
+        )
     else:
         text = (
             "💎 <b>Premium afzalliklari:</b>\n\n"
@@ -1141,36 +1144,22 @@ async def premium_handler(message: Message, db_user: User = None):
         await message.answer("📭 Tariflar mavjud emas.")
         return
 
-    # Sozlamalardan chegirma muddatini olish
+    # Flash sale faqat trigger orqali ochiladi (premium kod / trial tugashi push).
     settings = await get_bot_settings()
-    discount_duration = settings.discount_duration
-
-    # Flash sale
-    is_flash_sale = settings.discount_active
-    seconds_left = discount_duration
-
-    if db_user and settings.discount_active:
-        if not db_user.premium_first_view:
-            await set_premium_first_view(db_user.user_id)
-            seconds_left = discount_duration
-        else:
-            is_flash_sale = db_user.is_flash_sale_active
-            seconds_left = db_user.flash_sale_seconds_left
+    discount_percent = settings.discount_percent
+    is_flash_sale = bool(settings.discount_active and db_user and db_user.is_flash_sale_active)
+    seconds_left = db_user.flash_sale_seconds_left if db_user else 0
 
     if is_flash_sale:
-        minutes = seconds_left // 60
-        secs = seconds_left % 60
-        duration_mins = discount_duration // 60
         await message.answer(
-            f"🔥 <b>FLASH SALE!</b> 🔥\n\n"
-            f"⏰ <b>CHEGIRMA!</b> Vaqt: {minutes}:{secs:02d}\n\n"
+            f"🔥 <b>FLASH SALE — {discount_percent}% CHEGIRMA!</b> 🔥\n\n"
+            f"⏰ <b>Shoshiling! Atigi {seconds_left} soniya qoldi.</b>\n\n"
             "💎 <b>Premium afzalliklari:</b>\n\n"
             "✅ Barcha kinolarga kirish\n"
             "✅ Reklamasiz foydalanish\n"
             "✅ Tezkor yuklash\n\n"
-            f"⚡ <b>Shoshiling! Taklif atigi {duration_mins} daqiqa amal qiladi.</b>\n\n"
-            "📦 Tarifni tanlang:",
-            reply_markup=flash_sale_tariffs_kb(tariffs, is_discount=True)
+            "📦 Chegirmali tarifni tanlang:",
+            reply_markup=flash_sale_tariffs_kb(tariffs, is_discount=True, discount_percent=discount_percent)
         )
     else:
         await message.answer(
@@ -1188,22 +1177,26 @@ async def flash_tariff_callback(callback: CallbackQuery, db_user: User = None):
     """Flash sale tarif tanlash"""
     parts = callback.data.split(":")
     tariff_id = int(parts[1])
-    is_discount = parts[2] == "1"
 
     tariff = await get_tariff_by_id(tariff_id)
     if not tariff:
         await callback.answer("❌ Tarif topilmadi!", show_alert=True)
         return
 
-    # Narx doim qo'yilgan narx (chegirma yo'q, 2x yo'q). Flash sale faqat taymer/urgency;
-    # haqiqiy chegirma qo'llanmagani uchun "chegirmali" demaymiz va is_discounted=False.
-    price = tariff.price
-    price_text = f"{price:,} so'm"
-    with_discount = False
-
-    # Karta ma'lumotlarini olish
-    from apps.core.models import BotSettings
     settings = await get_bot_settings()
+
+    # MUHIM: chegirmani callback flag'idan EMAS, server holatidan hisoblaymiz. Aks holda
+    # user callback'ni qo'lda ":1" qilib chegirmani "majburlashi" mumkin edi.
+    is_discount = bool(settings and settings.discount_active and db_user and db_user.is_flash_sale_active)
+
+    if is_discount:
+        price = apply_discount(tariff.price, settings.discount_percent)
+        price_text = f"<s>{tariff.price:,}</s> <b>{price:,}</b> so'm (-{settings.discount_percent}%)"
+        with_discount = True
+    else:
+        price = tariff.price
+        price_text = f"{price:,} so'm"
+        with_discount = False
 
     card_number = esc(settings.card_number) if settings else '8600 1234 5678 9012'
     card_holder = esc(settings.card_holder) if settings else 'CARDHOLDER NAME'
@@ -1779,14 +1772,12 @@ def get_saved_movies(user_id: int, page: int = 1, per_page: int = 8):
 # ==================== FLASH SALE FUNKSIYALARI ====================
 
 @sync_to_async
-def set_premium_first_view(user_id: int):
-    """Foydalanuvchi premium sahifani birinchi marta ko'rganini belgilash"""
+def start_flash_sale(user_id: int):
+    """Flash sale oynasini boshlash/qayta boshlash (langar'ni HOZIRga o'rnatadi).
+    Har chaqirilganda yangilanadi -> premium kod har kiritilganda yangi 30s oynasi."""
     from django.utils import timezone
     try:
-        user = User.objects.get(user_id=user_id)
-        if not user.premium_first_view:
-            user.premium_first_view = timezone.now()
-            user.save(update_fields=['premium_first_view'])
+        User.objects.filter(user_id=user_id).update(flash_sale_started=timezone.now())
         return True
     except User.DoesNotExist:
         return False

@@ -16,6 +16,11 @@ class AddMovieState(StatesGroup):
     confirm = State()  # Tasdiqlash
 
 
+class EditMovieState(StatesGroup):
+    """Kino tahrirlash holatlari (qaysi maydon FSM data'da: edit_code, edit_field)"""
+    value = State()
+
+
 class BroadcastState(StatesGroup):
     """Xabar yuborish holatlari"""
     target = State()

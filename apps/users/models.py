@@ -43,8 +43,14 @@ class User(models.Model):
     # Statistika
     movies_watched = models.PositiveIntegerField(default=0, verbose_name="Ko'rilgan kinolar")
 
-    # Flash sale - 3 daqiqa ichida chegirma
+    # Flash sale - chegirma vaqti ichida
     premium_first_view = models.DateTimeField(blank=True, null=True, verbose_name='Premium birinchi ko\'rilgan')
+    # Flash sale oynasi boshlangan vaqt (qayta o'rnatiladigan langar). Ikki trigger o'rnatadi:
+    #   1) premium bo'lmagan user premium kino kodini kiritganda
+    #   2) trial tugagan kuni scheduler push yuborganda
+    flash_sale_started = models.DateTimeField(blank=True, null=True, verbose_name='Flash sale boshlangan')
+    # Trial tugashi bo'yicha flash push yuborilganmi (takror spamning oldini oladi)
+    trial_flash_sent = models.BooleanField(default=False, verbose_name='Trial flash yuborilgan')
 
     # Holat
     is_banned = models.BooleanField(default=False, verbose_name='Bloklangan')
@@ -128,24 +134,24 @@ class User(models.Model):
             settings = BotSettings.get_settings()
             return settings.discount_duration
         except Exception:
-            return 180  # Default 3 daqiqa
+            return 30  # Default 30 soniya
 
     @property
     def is_flash_sale_active(self):
-        """Chegirma vaqti ichidami"""
-        if not self.premium_first_view:
-            return True  # Hali ko'rmagan - birinchi marta
+        """Flash sale oynasi hozir ochiqmi (langar o'rnatilgan va muddat o'tmagan)"""
+        if not self.flash_sale_started:
+            return False  # Trigger bo'lmagan - flash sale yo'q
         duration = self._get_discount_duration()
-        time_passed = (timezone.now() - self.premium_first_view).total_seconds()
+        time_passed = (timezone.now() - self.flash_sale_started).total_seconds()
         return time_passed <= duration
 
     @property
     def flash_sale_seconds_left(self):
         """Flash sale uchun qancha vaqt qoldi (sekundda)"""
         duration = self._get_discount_duration()
-        if not self.premium_first_view:
-            return duration
-        time_passed = (timezone.now() - self.premium_first_view).total_seconds()
+        if not self.flash_sale_started:
+            return 0
+        time_passed = (timezone.now() - self.flash_sale_started).total_seconds()
         remaining = duration - time_passed
         return max(0, int(remaining))
 

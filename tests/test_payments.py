@@ -143,48 +143,56 @@ class TestFlashSale:
     """Test flash sale"""
 
     def test_flash_sale_trigger(self, user_model):
-        """Test flash sale trigger"""
-        user = user_model(user_id=111, premium_first_view=None)
-        user.premium_first_view = timezone.now()
-        assert user.premium_first_view is not None
+        """Trigger langarni o'rnatadi -> oyna ochiladi"""
+        user = user_model(user_id=111, flash_sale_started=None)
+        assert user.is_flash_sale_active is False
+        user.flash_sale_started = timezone.now()
+        assert user.is_flash_sale_active is True
 
     def test_flash_sale_active(self, user_model):
-        """Test flash sale is active"""
+        """Flash sale oynasi ochiq"""
         user = user_model(
             user_id=222,
-            premium_first_view=timezone.now()
+            flash_sale_started=timezone.now()
         )
         assert user.is_flash_sale_active is True
 
     def test_flash_sale_expired(self, user_model):
-        """Test flash sale expired"""
+        """Flash sale oynasi yopiq (30s dan oshgan)"""
         user = user_model(
             user_id=333,
-            premium_first_view=timezone.now() - timedelta(minutes=10)
+            flash_sale_started=timezone.now() - timedelta(minutes=10)
         )
         assert user.is_flash_sale_active is False
 
-    def test_flash_sale_price_not_doubled(self, db_tariff):
-        """Flash sale tugagach ham narx OSHMASLIGI kerak (2x olib tashlandi)"""
+    def test_flash_sale_no_discount_price(self, db_tariff):
+        """is_discount=False -> qo'yilgan narx (chegirmasiz)"""
         from bot.keyboards import flash_sale_tariffs_kb
 
-        # is_discount=False -> flash sale tugagan/o'chiq holat
         kb = flash_sale_tariffs_kb([db_tariff], is_discount=False)
         joined = " ".join(b.text for row in kb.inline_keyboard for b in row)
 
-        # Narx = qo'yilgan narx (10,000), 2x (20,000) EMAS
         assert f"{db_tariff.price:,}" in joined
-        assert f"{db_tariff.price * 2:,}" not in joined
+        assert "-" not in joined.replace("so'm", "")  # foizli chegirma belgisi yo'q
 
-    def test_flash_sale_active_price_not_doubled(self, db_tariff):
-        """Flash sale aktiv holatda ham narx qo'yilgan narx"""
-        from bot.keyboards import flash_sale_tariffs_kb
+    def test_flash_sale_real_discount(self, db_tariff):
+        """is_discount=True + 50% -> haqiqiy chegirmali narx ko'rsatiladi"""
+        from bot.keyboards import flash_sale_tariffs_kb, apply_discount
 
-        kb = flash_sale_tariffs_kb([db_tariff], is_discount=True)
+        kb = flash_sale_tariffs_kb([db_tariff], is_discount=True, discount_percent=50)
         joined = " ".join(b.text for row in kb.inline_keyboard for b in row)
 
-        assert f"{db_tariff.price:,}" in joined
-        assert f"{db_tariff.price * 2:,}" not in joined
+        discounted = apply_discount(db_tariff.price, 50)
+        assert f"{discounted:,}" in joined       # chegirmali narx (5,000)
+        assert "-50%" in joined                  # chegirma belgisi
+
+    def test_apply_discount_math(self):
+        """apply_discount hisob-kitobi to'g'ri"""
+        from bot.keyboards import apply_discount
+        assert apply_discount(10000, 50) == 5000
+        assert apply_discount(10000, 0) == 10000
+        assert apply_discount(9999, 50) == 9999 - 4999  # butun bo'lish
+        assert apply_discount(10000, 100) == 0
 
 
 class TestPaymentFlow:

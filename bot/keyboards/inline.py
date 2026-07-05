@@ -215,23 +215,31 @@ def tariffs_kb(tariffs: list, with_discount: bool = False) -> InlineKeyboardMark
     return builder.as_markup()
 
 
-def flash_sale_tariffs_kb(tariffs: list, is_discount: bool = True) -> InlineKeyboardMarkup:
-    """Flash sale tariflar - taymer urgency, lekin narx OSHMAYDI (doim qo'yilgan narx)"""
+def apply_discount(price: int, percent: int) -> int:
+    """Narxga foizli chegirma qo'llash (butun so'm)."""
+    if not percent or percent <= 0:
+        return price
+    percent = min(percent, 100)
+    return price - (price * percent // 100)
+
+
+def flash_sale_tariffs_kb(tariffs: list, is_discount: bool = True, discount_percent: int = 0) -> InlineKeyboardMarkup:
+    """Flash sale tariflar. is_discount=True bo'lsa haqiqiy chegirmali narx ko'rsatiladi."""
     builder = InlineKeyboardBuilder()
 
     for tariff in tariffs:
         original_price = tariff.price
 
-        if is_discount:
-            # Chegirmali narx (hozirgi narx)
-            text = f"🔥 {tariff.name} • {original_price:,} so'm"
-            # Callback da is_discount=1 yuboramiz
+        if is_discount and discount_percent > 0:
+            # Haqiqiy chegirmali narx
+            new_price = apply_discount(original_price, discount_percent)
+            text = f"🔥 {tariff.name} • {new_price:,} so'm (-{discount_percent}%)"
             builder.row(InlineKeyboardButton(
                 text=text,
                 callback_data=f"flash_tariff:{tariff.id}:1"
             ))
         else:
-            # Flash sale tugadi - narx OSHMAYDI, qo'yilgan narx (2x olib tashlandi)
+            # Chegirmasiz - qo'yilgan narx
             text = f"💎 {tariff.name} • {original_price:,} so'm"
             builder.row(InlineKeyboardButton(
                 text=text,
