@@ -197,6 +197,23 @@ def filter_movies_kb(movies: list, filter_type: str, filter_value, page: int = 1
     return builder.as_markup()
 
 
+def name_search_results_kb(movies: list) -> InlineKeyboardMarkup:
+    """Nom bo'yicha qidiruv natijalari — bosilса kinoni BOT yuboradi (movie_view)."""
+    builder = InlineKeyboardBuilder()
+    for movie in movies:
+        prefix = "💎 " if movie.is_premium else "🎬 "
+        builder.row(InlineKeyboardButton(
+            text=f"{prefix}{movie.display_title} [{movie.code}]",
+            callback_data=f"movie_view:{movie.code}"
+        ))
+    builder.row(InlineKeyboardButton(text="🔁 Yana qidirish", callback_data="search_by_name"))
+    builder.row(
+        InlineKeyboardButton(text="🔙 Orqaga", callback_data="search"),
+        InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="back_to_menu")
+    )
+    return builder.as_markup()
+
+
 def tariffs_kb(tariffs: list, with_discount: bool = False) -> InlineKeyboardMarkup:
     """Tariflar - chiroyli"""
     builder = InlineKeyboardBuilder()
@@ -481,7 +498,7 @@ def search_filter_kb() -> InlineKeyboardMarkup:
     """Qidiruv filtrlari"""
     builder = InlineKeyboardBuilder()
 
-    builder.row(InlineKeyboardButton(text="🔤 Nom bo'yicha qidirish", switch_inline_query_current_chat=""))
+    builder.row(InlineKeyboardButton(text="🔤 Nom bo'yicha qidirish", callback_data="search_by_name"))
     builder.row(InlineKeyboardButton(text="🎬 Barcha kinolar", callback_data="all_movies"))
     builder.row(
         InlineKeyboardButton(text="📂 Janr", callback_data="filter:category"),

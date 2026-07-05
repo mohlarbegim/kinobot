@@ -19,7 +19,7 @@ from bot.keyboards import (
     tariffs_kb, back_kb, movie_action_kb, saved_movies_kb,
     search_filter_kb, filter_country_kb, filter_language_kb, filter_year_kb,
     flash_sale_tariffs_kb, filter_movies_kb, apply_discount,
-    profile_kb, history_movies_kb
+    profile_kb, history_movies_kb, name_search_results_kb
 )
 from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, remove_channel_membership, get_message_text, compute_missing_channels, esc
 from bot.states import MovieRequestState
@@ -505,8 +505,23 @@ async def search_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ==================== NOM BO'YICHA QIDIRISH (Inline mode orqali) ====================
-# Inline mode handler: bot/handlers/inline.py da
+# ==================== NOM BO'YICHA QIDIRISH (bot ichida, avtomatik) ====================
+# Foydalanuvchi shunchaki kino NOMINI yozadi (kamida 3 harf) — bot avtomatik
+# qidirib, natijalarni chiqaradi va kino BOT tomonidan yetkaziladi (inline emas).
+# Asosiy handler: name_search_auto (fayl oxirida, barcha Command'lardan keyin).
+
+@router.callback_query(F.data == "search_by_name")
+async def search_by_name_callback(callback: CallbackQuery, state: FSMContext):
+    """"Nom bo'yicha qidirish" tugmasi — foydalanuvchiga nom yozishни tushuntiradi."""
+    await state.clear()
+    await callback.message.edit_text(
+        "🔤 <b>Nom bo'yicha qidirish</b>\n\n"
+        "Kino <b>nomini</b> yozing (kamida 3 harf) — men mos kinolarni chiqaraman.\n\n"
+        "<i>Masalan: Avatar, Salaar, Titanik...</i>",
+        reply_markup=back_kb()
+    )
+    await callback.answer()
+
 
 @router.callback_query(F.data.startswith("movie_view:"))
 async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot: Bot = None):
@@ -1715,8 +1730,69 @@ async def help_handler(message: Message):
         "/categories - Kategoriyalar\n"
         "/premium - Premium\n"
         "/profile - Profil\n\n"
-        "🎬 Kino olish uchun kodini yuboring.",
+        "🎬 Kino olish uchun kodini yuboring.\n"
+        "🔤 Yoki kino nomini yozing (kamida 3 harf) — avtomatik qidiraman.",
         reply_markup=back_kb()
+    )
+
+
+# ==================== NOM BO'YICHA AVTOMATIK QIDIRISH ====================
+# MUHIM: Bu catch-all handler barcha Command() va raqamli-kod handlerlaridan
+# KEYIN ro'yxatdan o'tishi SHART (fayl oxirida). Aks holda /top, /help kabi
+# buyruqlarni ham yutib yuborardi. Raqamli matn get_movie_by_code'ga tushadi;
+# bu yerga faqat raqamsiz oddiy matn (kino nomi) keladi. StateFilter(None) —
+# FSM holatidagi (so'rov/to'lov) matnga tegmaydi.
+
+@router.message(F.text, StateFilter(None))
+async def name_search_auto(message: Message, db_user: User = None, bot: Bot = None):
+    """Foydalanuvchi kino NOMINI yozsa — avtomatik qidiruv (natijani BOT yetkazadi)."""
+    text = message.text.strip()
+
+    # Noma'lum buyruq (/foo) — e'tiborsiz qoldiramiz
+    if text.startswith('/'):
+        return
+
+    # Bo'shliqli/qirqilgan RAQAMLI matn (masalan " 516 ") ^\d+$ regexpga tushmaydi —
+    # bu kino KODI, nom emas. Kod handleriga yo'naltiramiz.
+    if text.isdigit() and len(text) <= MAX_MOVIE_CODE_LENGTH:
+        await get_movie_by_code(message, db_user=db_user, bot=bot)
+        return
+
+    # Juda qisqa so'rov
+    if len(text) < 3:
+        await message.answer(
+            "🔎 Qidirish uchun kamida <b>3 ta harf</b> yozing.\n\n"
+            "🎬 Yoki kino <b>kodini</b> yuboring.",
+            reply_markup=back_kb()
+        )
+        return
+
+    # Obunani tekshirish (kod bo'yicha qidiruv bilan bir xil qoida)
+    not_subscribed = await check_user_subscription(bot, message.from_user.id, db_user)
+    if not_subscribed:
+        await message.answer(
+            subscription_prompt_text(not_subscribed),
+            reply_markup=channels_kb(not_subscribed)
+        )
+        return
+
+    movies = await search_movies_by_name(text, limit=10)
+
+    if not movies:
+        # Topilmadi — so'rov qoldirishni taklif qilamiz
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(text="🙋 Kino so'rash", callback_data="request_movie"))
+        builder.row(InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="back_to_menu"))
+        await message.answer(
+            f"😕 «{esc(text)}» bo'yicha hech narsa topilmadi.\n\n"
+            "Nomni boshqacha yozib ko'ring yoki kino so'rovini qoldiring.",
+            reply_markup=builder.as_markup()
+        )
+        return
+
+    await message.answer(
+        f"🔎 «{esc(text)}» bo'yicha <b>{len(movies)}</b> ta natija topildi:",
+        reply_markup=name_search_results_kb(movies)
     )
 
 
