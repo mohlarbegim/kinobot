@@ -80,6 +80,15 @@ class TestEditMovieField:
         assert err is None
         assert movie.file_id == 'NEW_FILE_ID'
 
+    def test_edit_poster_thumbnail(self, movie_model):
+        from bot.handlers.admin import edit_movie_field
+        self._make_movie(movie_model, '70010', file_id='')
+
+        movie, err = edit_movie_field.func('70010', 'thumbnail_file_id', 'POSTER_ID')
+        assert err is None
+        assert movie.thumbnail_file_id == 'POSTER_ID'
+        assert movie_model.objects.get(code='70010').thumbnail_file_id == 'POSTER_ID'
+
     def test_edit_not_found(self, movie_model):
         from bot.handlers.admin import edit_movie_field
         movie, err = edit_movie_field.func('70999', 'title', 'X')
@@ -93,3 +102,31 @@ class TestEditMovieField:
         movie, err = edit_movie_field.func('70008', 'views', 999)
         assert err == 'not_found'
         assert movie is None
+
+
+class TestCreateMoviePoster:
+    """create_movie posterни (thumbnail_file_id) saqlashi"""
+
+    def test_create_with_poster_no_video(self, movie_model, category_model):
+        from bot.handlers.admin import create_movie
+        movie = create_movie.func(
+            code='70020', title='Poster kino', file_id='',
+            thumbnail_file_id='POSTER_ABC', category_id=None,
+            year=None, country='usa', quality='720p', language='uzbek',
+            description='', is_premium=False, added_by_id=None,
+        )
+        assert movie.file_id == ''
+        assert movie.thumbnail_file_id == 'POSTER_ABC'
+        # DB'da ham saqlangan
+        assert movie_model.objects.get(code='70020').thumbnail_file_id == 'POSTER_ABC'
+
+    def test_create_default_no_poster(self, movie_model):
+        from bot.handlers.admin import create_movie
+        movie = create_movie.func(
+            code='70021', title='Video kino', file_id='VIDEO_XYZ',
+            category_id=None, year=None, country='usa', quality='720p',
+            language='uzbek', description='', is_premium=False, added_by_id=None,
+        )
+        # thumbnail_file_id default bo'sh (ixtiyoriy argument)
+        assert movie.thumbnail_file_id == ''
+        assert movie.file_id == 'VIDEO_XYZ'

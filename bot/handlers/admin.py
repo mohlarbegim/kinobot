@@ -315,6 +315,7 @@ async def admin_movie_delete_confirm(callback: CallbackQuery):
 _MEDIT_FIELD_LABELS = {
     'title': 'Nom',
     'video': 'Video',
+    'poster': 'Poster',
     'category': 'Janr',
     'year': 'Yil',
     'description': 'Tavsif',
@@ -335,6 +336,7 @@ async def admin_movie_edit_menu(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Nom", callback_data=f"admin:medit:title:{code}")],
         [InlineKeyboardButton(text="🎬 Video", callback_data=f"admin:medit:video:{code}")],
+        [InlineKeyboardButton(text="🖼 Poster", callback_data=f"admin:medit:poster:{code}")],
         [InlineKeyboardButton(text="🎭 Janr", callback_data=f"admin:medit:category:{code}")],
         [InlineKeyboardButton(text="📅 Yil", callback_data=f"admin:medit:year:{code}")],
         [InlineKeyboardButton(text="📖 Tavsif", callback_data=f"admin:medit:description:{code}")],
@@ -381,6 +383,11 @@ async def admin_movie_edit_field(callback: CallbackQuery, state: FSMContext):
     elif field == 'video':
         await callback.message.edit_text(
             f"🎬 <b>{esc(movie.display_title)}</b> uchun yangi <b>video</b> faylini yuboring:",
+            reply_markup=cancel_inline_kb()
+        )
+    elif field == 'poster':
+        await callback.message.edit_text(
+            f"🖼 <b>{esc(movie.display_title)}</b> uchun yangi <b>poster rasm</b>ni yuboring:",
             reply_markup=cancel_inline_kb()
         )
     else:
@@ -451,6 +458,25 @@ async def admin_movie_edit_video(message: Message, state: FSMContext):
     await message.answer("✅ Video yangilandi!", reply_markup=_medit_result_kb(movie.code))
 
 
+@router.message(EditMovieState.value, F.photo)
+async def admin_movie_edit_photo(message: Message, state: FSMContext):
+    """Yangi poster rasmini saqlash."""
+    data = await state.get_data()
+    code = data.get('edit_code')
+    field = data.get('edit_field')
+    if field != 'poster':
+        await message.answer("❌ Bu bosqichda rasm kutilmayapti.", reply_markup=cancel_inline_kb())
+        return
+
+    file_id = message.photo[-1].file_id
+    movie, err = await edit_movie_field(code, 'thumbnail_file_id', file_id)
+    await state.clear()
+    if err or not movie:
+        await message.answer("❌ Kino topilmadi.")
+        return
+    await message.answer("✅ Poster yangilandi!", reply_markup=_medit_result_kb(movie.code))
+
+
 @router.message(EditMovieState.value, F.text)
 async def admin_movie_edit_text(message: Message, state: FSMContext):
     """Matnli maydonlarni (nom/yil/tavsif/kod) saqlash."""
@@ -483,6 +509,12 @@ async def admin_movie_edit_text(message: Message, state: FSMContext):
             await message.answer("❌ Tavsif juda uzun (max 2000 belgi).", reply_markup=cancel_inline_kb())
             return
         value = val
+    elif field == 'video':
+        await message.answer("❌ Bu bosqichda video fayl yuboring (matn emas).", reply_markup=cancel_inline_kb())
+        return
+    elif field == 'poster':
+        await message.answer("❌ Bu bosqichda poster rasm yuboring (matn emas).", reply_markup=cancel_inline_kb())
+        return
     else:
         await state.clear()
         return
@@ -618,8 +650,10 @@ async def add_movie_title(message: Message, state: FSMContext):
     await message.answer(
         f"✅ Kod: <code>{data.get('code')}</code>\n"
         f"✅ Nom: {message.text.strip()}\n\n"
-        "3️⃣ Video faylni yuboring:\n"
-        "<i>Yoki videoni keyinroq qo'shish uchun «⏭ Videosiz o'tkazib yuborish»ni bosing.</i>",
+        "3️⃣ <b>Video</b> faylni <b>yoki poster rasmни</b> yuboring:\n"
+        "<i>• Video yuborsangiz — kino o'sha video bo'ladi.\n"
+        "• Rasm yuborsangiz — poster bo'ladi (videosiz kino).\n"
+        "• Yoki «⏭ Videosiz o'tkazib yuborish»ni bosing.</i>",
         reply_markup=kb
     )
 
@@ -700,18 +734,47 @@ async def add_movie_video_skip(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.message(AddMovieState.video, F.photo)
+async def add_movie_photo(message: Message, state: FSMContext):
+    """Rasm yuborilsa — poster (thumbnail) sifatida saqlaymiz, kino videosiz bo'ladi."""
+    poster_id = message.photo[-1].file_id
+    data = await state.get_data()
+    await state.update_data(file_id="", thumbnail_file_id=poster_id)
+    await state.set_state(AddMovieState.category)
+
+    note = "🖼 Poster qabul qilindi (videosiz kino)"
+    categories = await get_categories()
+    if categories:
+        await message.answer(
+            f"✅ Kod: <code>{data.get('code')}</code>\n"
+            f"✅ Nom: {data.get('title')}\n"
+            f"{note}\n\n"
+            "4️⃣ Janrni tanlang:",
+            reply_markup=admin_categories_kb(categories)
+        )
+    else:
+        await state.update_data(category_id=None)
+        await state.set_state(AddMovieState.quality)
+        await message.answer(
+            f"✅ Kod: <code>{data.get('code')}</code>\n"
+            f"✅ Nom: {data.get('title')}\n"
+            f"{note}\n\n"
+            "4️⃣ Sifatni tanlang:",
+            reply_markup=movie_quality_kb()
+        )
+
+
 @router.message(AddMovieState.video)
 async def add_movie_video_invalid(message: Message, state: FSMContext):
-    """Video bosqichida video EMAS narsa (rasm/matn/stiker) yuborilsa tushunarli xato.
-    Ilgari hech narsa bo'lmasdi (jimgina o'tib ketardi) — 'rasm yuborib bo'lmayapti'."""
+    """Video/rasm EMAS narsa (matn/stiker) yuborilsa tushunarli xato."""
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏭ Videosiz o'tkazib yuborish", callback_data="video:skip")],
         [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")]
     ])
     await message.answer(
-        "❌ Bu yerga <b>video</b> kerak, rasm emas.\n\n"
-        "🎬 Iltimos kino <b>video</b> faylini yuboring "
+        "❌ Bu bosqichda <b>video</b> yoki <b>poster rasm</b> kerak.\n\n"
+        "🎬 Kino video faylini yoki poster rasmni yuboring "
         "(yoki «⏭ Videosiz o'tkazib yuborish»ni bosing).",
         reply_markup=kb
     )
@@ -1020,6 +1083,7 @@ async def add_movie_confirm(callback: CallbackQuery, state: FSMContext, db_user:
         code=data['code'],
         title=data['title'],
         file_id=data.get('file_id', ''),
+        thumbnail_file_id=data.get('thumbnail_file_id', ''),
         category_id=data.get('category_id'),
         year=data.get('year'),
         country=data.get('country', 'usa'),
@@ -3472,7 +3536,7 @@ def get_categories():
 
 
 @sync_to_async
-def create_movie(code, title, file_id, category_id, year, country, quality, language, description, is_premium, added_by_id):
+def create_movie(code, title, file_id, category_id, year, country, quality, language, description, is_premium, added_by_id, thumbnail_file_id=''):
     added_by = None
     if added_by_id:
         try:
@@ -3484,6 +3548,7 @@ def create_movie(code, title, file_id, category_id, year, country, quality, lang
         code=code,
         title=title,
         file_id=file_id,
+        thumbnail_file_id=thumbnail_file_id,
         category_id=category_id,
         year=year,
         country=country,
@@ -3783,7 +3848,7 @@ def delete_movie(code: str) -> bool:
 def edit_movie_field(code: str, field: str, value):
     """Kino bitta maydonini yangilash. field: title/description/year/file_id/code/category_id.
     Qaytaradi: (movie yoki None, error yoki None). error: 'not_found' | 'duplicate'."""
-    ALLOWED = {'title', 'description', 'year', 'file_id', 'code', 'category_id'}
+    ALLOWED = {'title', 'description', 'year', 'file_id', 'code', 'category_id', 'thumbnail_file_id'}
     if field not in ALLOWED:
         return None, "not_found"
     try:

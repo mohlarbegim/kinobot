@@ -107,6 +107,14 @@ async def send_movie_or_notice(target, movie, caption, reply_markup=None):
             reply_markup=reply_markup,
             protect_content=True,
         )
+    elif movie.thumbnail_file_id:
+        # Video yo'q, lekin poster rasm bor -> posterni ko'rsatamiz
+        await target.answer_photo(
+            photo=movie.thumbnail_file_id,
+            caption=caption,
+            reply_markup=reply_markup,
+            protect_content=True,
+        )
     else:
         await target.answer(
             f"{caption}\n\n⚠️ <i>Video hali yuklanmagan.</i>",
@@ -524,17 +532,26 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
 
     # Kino yuborish
     try:
+        cap = f"🎬 <b>{esc(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>"
         if movie.file_id:
             await bot.send_video(
                 chat_id=callback.from_user.id,
                 video=movie.file_id,
-                caption=f"🎬 <b>{esc(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>",
+                caption=cap,
+                reply_markup=movie_action_kb(movie.code, is_saved, movie.likes, is_liked),
+                protect_content=True,
+            )
+        elif movie.thumbnail_file_id:
+            await bot.send_photo(
+                chat_id=callback.from_user.id,
+                photo=movie.thumbnail_file_id,
+                caption=cap,
                 reply_markup=movie_action_kb(movie.code, is_saved, movie.likes, is_liked),
                 protect_content=True,
             )
         else:
             await callback.message.answer(
-                f"🎬 <b>{esc(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>\n\n⚠️ Video fayl topilmadi.",
+                f"{cap}\n\n⚠️ Video fayl topilmadi.",
                 reply_markup=movie_action_kb(movie.code, is_saved, movie.likes, is_liked)
             )
     except TelegramBadRequest as e:
