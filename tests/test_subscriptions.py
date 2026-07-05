@@ -300,6 +300,24 @@ class TestChannelsKeyboard:
         assert 'confirm_ch:1' not in callbacks        # Telegram uchun bo'lmasligi kerak
         assert 'check_subscription' in callbacks      # Tekshirish tugmasi bor
 
+    def test_channels_are_numbered(self):
+        """Havola tugmalari tartib raqami bilan; Instagram (oxirgi) eng katta raqamda"""
+        from types import SimpleNamespace
+        from bot.keyboards import channels_kb
+
+        tg1 = SimpleNamespace(id=1, title='TG1', invite_link='https://t.me/a', is_checkable=True)
+        tg2 = SimpleNamespace(id=2, title='TG2', invite_link='https://t.me/b', is_checkable=True)
+        ig = SimpleNamespace(id=3, title='IG', invite_link='https://instagram.com/x', is_checkable=False)
+
+        kb = channels_kb([tg1, tg2, ig])
+        # Havola (url) tugmalari matnlari
+        url_texts = [b.text for row in kb.inline_keyboard for b in row if b.url]
+
+        assert url_texts[0].startswith('1. ')          # birinchi kanal
+        assert url_texts[1].startswith('2. ')
+        assert url_texts[2].startswith('3. ')          # Instagram oxirgi raqam
+        assert 'IG' in url_texts[2]
+
     def test_confirming_id_shows_yes_button(self):
         """confirming_id berilganda o'sha kanal 'Ha, tasdiqlayman' (confirm_ch_yes) bo'ladi"""
         from types import SimpleNamespace

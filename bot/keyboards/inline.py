@@ -45,11 +45,13 @@ def channels_kb(channels: list, check: bool = True, confirming_id=None) -> Inlin
     """
     builder = InlineKeyboardBuilder()
 
-    for channel in channels:
+    # Kanallar tartib raqami bilan (1, 2, 3...). Instagram/tashqi (non-checkable)
+    # check_subscription'da doim oxirida keladi -> eng oxirgi raqam bo'ladi.
+    for i, channel in enumerate(channels, start=1):
         # is_checkable model instance property'si; not_subscribed model obyektlari uzatiladi
         checkable = getattr(channel, 'is_checkable', True)
         builder.row(InlineKeyboardButton(
-            text=f"{_channel_emoji(channel)} {channel.title}",
+            text=f"{i}. {_channel_emoji(channel)} {channel.title}",
             url=channel.invite_link
         ))
         if not checkable:
