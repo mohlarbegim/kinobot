@@ -1,5 +1,8 @@
 from aiogram import Router
-from aiogram.types import InlineQuery, InlineQueryResultArticle, InlineQueryResultCachedVideo, InputTextMessageContent
+from aiogram.types import (
+    InlineQuery, InlineQueryResultArticle, InlineQueryResultCachedVideo,
+    InlineQueryResultCachedPhoto, InputTextMessageContent,
+)
 from asgiref.sync import sync_to_async
 from hashlib import md5
 
@@ -74,29 +77,40 @@ async def inline_search(inline_query: InlineQuery):
             ))
             continue
 
-        # Video natija
-        try:
-            result = InlineQueryResultCachedVideo(
+        caption = f"🎬 <b>{esc(movie.display_title)}</b>\n📝 Kod: <code>{esc(movie.code)}</code>"
+
+        if movie.file_id:
+            # Video bor -> cached video natija
+            results.append(InlineQueryResultCachedVideo(
                 id=result_id,
                 video_file_id=movie.file_id,
                 title=movie.display_title,
                 description=f"📝 Kod: {movie.code}",
-                caption=f"🎬 <b>{esc(movie.display_title)}</b>\n📝 Kod: <code>{esc(movie.code)}</code>",
-                parse_mode="HTML"
-            )
-            results.append(result)
-        except Exception:
-            # Video ishlamasa, matn natija
-            result = InlineQueryResultArticle(
+                caption=caption,
+                parse_mode="HTML",
+            ))
+        elif movie.thumbnail_file_id:
+            # Video yo'q, poster bor -> cached photo natija
+            results.append(InlineQueryResultCachedPhoto(
+                id=result_id,
+                photo_file_id=movie.thumbnail_file_id,
+                title=movie.display_title,
+                description=f"📝 Kod: {movie.code}",
+                caption=caption,
+                parse_mode="HTML",
+            ))
+        else:
+            # Media yo'q -> matn natija (kod bilan). MUHIM: bo'sh file_id bilan
+            # CachedVideo yaratmaymiz - u butun inline javobni buzardi.
+            results.append(InlineQueryResultArticle(
                 id=result_id,
                 title=movie.display_title,
                 description=f"📝 Kod: {movie.code}",
                 input_message_content=InputTextMessageContent(
-                    message_text=f"🎬 <b>{esc(movie.display_title)}</b>\n📝 Kod: <code>{esc(movie.code)}</code>",
-                    parse_mode="HTML"
+                    message_text=caption,
+                    parse_mode="HTML",
                 )
-            )
-            results.append(result)
+            ))
 
     await inline_query.answer(
         results=results,
