@@ -13,7 +13,7 @@ from apps.payments.models import Tariff, Payment, PendingPaymentSession
 from apps.core.models import BotSettings
 from bot.keyboards import tariffs_kb, main_menu_inline_kb, payment_confirm_kb, back_kb
 from bot.filters import CanManagePayments
-from bot.utils import esc
+from bot.utils import esc, get_message_text
 from bot.middlewares.database import clear_user_cache
 
 logger = logging.getLogger(__name__)
@@ -47,15 +47,15 @@ async def tariff_select_callback(callback: CallbackQuery, db_user: User = None, 
         price = tariff.price
         discount_text = ""
 
-    text = (
-        f"💳 <b>To'lov ma'lumotlari:</b>\n\n"
-        f"📦 Tarif: <b>{esc(tariff.name)}</b>\n"
-        f"📅 Muddat: <b>{tariff.days} kun</b>\n"
-        f"💰 Narx: <b>{price:,} so'm</b>{discount_text}\n\n"
-        f"💳 Karta: <code>{esc(bot_settings.card_number)}</code>\n"
-        f"👤 Egasi: <b>{esc(bot_settings.card_holder)}</b>\n\n"
-        f"📸 <b>To'lovni amalga oshiring va screenshot yuboring.</b>\n\n"
-        f"⚠️ Izoh: Chekda <code>{callback.from_user.id}</code> ni ko'rsating."
+    text = await get_message_text(
+        'payment_instructions',
+        tariff_name=esc(tariff.name),
+        days=tariff.days,
+        price=f"{price:,} so'm{discount_text}",
+        amount=f"{price:,}",
+        card_number=esc(bot_settings.card_number),
+        card_holder=esc(bot_settings.card_holder),
+        user_id=callback.from_user.id,
     )
 
     # State ga tarif saqlash
@@ -195,11 +195,10 @@ async def approve_payment_callback(callback: CallbackQuery, bot: Bot):
     try:
         await bot.send_message(
             chat_id=result['user_telegram_id'],
-            text=(
-                f"🎉 <b>Premium aktivlashtirildi!</b>\n\n"
-                f"📦 Tarif: {esc(result['tariff_name'])}\n"
-                f"📅 Muddat: {result['tariff_days']} kun\n\n"
-                f"Botdan foydalaning! 🎬"
+            text=await get_message_text(
+                'payment_approved',
+                tariff_name=esc(result['tariff_name']),
+                days=result['tariff_days'],
             )
         )
     except TelegramBadRequest as e:
@@ -252,9 +251,9 @@ async def reject_payment_callback(callback: CallbackQuery, bot: Bot):
     try:
         await bot.send_message(
             chat_id=result['user_telegram_id'],
-            text=(
-                "❌ <b>To'lov rad etildi!</b>\n\n"
-                "Iltimos, to'g'ri chek yuboring yoki admin bilan bog'laning."
+            text=await get_message_text(
+                'payment_rejected',
+                reason='Chek tasdiqlanmadi',
             )
         )
     except TelegramBadRequest as e:

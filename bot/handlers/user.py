@@ -20,7 +20,7 @@ from bot.keyboards import (
     search_filter_kb, filter_country_kb, filter_language_kb, filter_year_kb,
     flash_sale_tariffs_kb, filter_movies_kb
 )
-from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, remove_channel_membership, esc
+from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, remove_channel_membership, get_message_text, esc
 from apps.payments.models import PendingPaymentSession
 from datetime import timedelta
 from django.utils import timezone as dj_timezone
@@ -189,9 +189,7 @@ async def cmd_start(message: Message, bot: Bot):
         status = "🎁 Trial\n\n"
 
     await message.answer(
-        f"👋 Salom, <b>{esc(user.full_name)}</b>!\n\n"
-        f"{status}"
-        "🎬 Kino kodini yuboring yoki menyu tugmalaridan foydalaning:",
+        await get_message_text('welcome', full_name=esc(user.full_name), status=status),
         reply_markup=main_menu_inline_kb(is_admin=is_admin)
     )
 
@@ -212,8 +210,7 @@ async def _finalize_subscription_success(callback: CallbackQuery, user):
 
     try:
         await callback.message.edit_text(
-            "✅ Obuna tasdiqlandi!\n\n"
-            "🎬 Kino kodini yuboring:",
+            await get_message_text('subscription_success'),
             reply_markup=main_menu_inline_kb(is_admin=is_admin)
         )
     except TelegramBadRequest:
@@ -396,8 +393,7 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
 
     if not movie:
         await message.answer(
-            f"❌ <code>{code}</code> kodli kino topilmadi.\n\n"
-            "🔍 Kodni tekshirib qaytadan yuboring.",
+            await get_message_text('movie_not_found', code=esc(code)),
             reply_markup=back_kb()
         )
         return
@@ -466,9 +462,7 @@ async def search_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
     await callback.message.edit_text(
-        "🔍 <b>Kino qidirish</b>\n\n"
-        "Kino kodini yuboring yoki filter tanlang:\n"
-        "Masalan: <code>123</code>",
+        await get_message_text('search_prompt'),
         reply_markup=search_filter_kb()
     )
     await callback.answer()
@@ -1219,16 +1213,19 @@ async def flash_tariff_callback(callback: CallbackQuery, db_user: User = None):
     from apps.core.models import BotSettings
     settings = await get_bot_settings()
 
+    card_number = esc(settings.card_number) if settings else '8600 1234 5678 9012'
+    card_holder = esc(settings.card_holder) if settings else 'CARDHOLDER NAME'
     await callback.message.edit_text(
-        f"💳 <b>To'lov</b>\n\n"
-        f"📦 Tarif: {esc(tariff.name)}\n"
-        f"⏳ Muddat: {tariff.days} kun\n"
-        f"💰 Narxi: <b>{price_text}</b>\n\n"
-        f"📋 <b>Karta ma'lumotlari:</b>\n"
-        f"💳 {esc(settings.card_number) if settings else '8600 1234 5678 9012'}\n"
-        f"👤 {esc(settings.card_holder) if settings else 'CARDHOLDER NAME'}\n\n"
-        f"⚠️ Izoh: Chekda <code>{callback.from_user.id}</code> ni ko'rsating.\n\n"
-        f"✅ To'lovni amalga oshiring va chekni yuboring:",
+        await get_message_text(
+            'payment_instructions',
+            tariff_name=esc(tariff.name),
+            days=tariff.days,
+            price=price_text,
+            amount=f"{price:,}",
+            card_number=card_number,
+            card_holder=card_holder,
+            user_id=callback.from_user.id,
+        ),
         reply_markup=back_kb()
     )
 
@@ -1288,16 +1285,18 @@ async def profile_callback(callback: CallbackQuery, db_user: User = None):
     bot_username = (await callback.bot.me()).username
 
     await callback.message.edit_text(
-        f"👤 <b>Profil</b>\n\n"
-        f"🆔 ID: <code>{db_user.user_id}</code>\n"
-        f"👤 Ism: {esc(db_user.full_name)}\n"
-        f"📊 Status: {status}\n"
-        f"🎬 Ko'rilgan: {format_number(db_user.movies_watched)}\n\n"
-        f"🔗 <b>Referal:</b>\n"
-        f"Kod: <code>{db_user.referral_code}</code>\n"
-        f"Taklif qilganlar: {referrals_count} ta\n\n"
-        f"📎 Havolangiz:\n"
-        f"https://t.me/{bot_username}?start={db_user.referral_code}",
+        await get_message_text(
+            'profile_info',
+            user_id=db_user.user_id,
+            full_name=esc(db_user.full_name),
+            status=status,
+            premium_status=status,
+            movies_watched=format_number(db_user.movies_watched),
+            referral_code=db_user.referral_code,
+            referrals_count=referrals_count,
+            bot_username=bot_username,
+            joined_date=format_date(db_user.created_at),
+        ),
         reply_markup=back_kb()
     )
     await callback.answer()
@@ -1321,16 +1320,18 @@ async def profile_handler(message: Message, db_user: User = None):
     bot_username = (await message.bot.me()).username
 
     await message.answer(
-        f"👤 <b>Profil</b>\n\n"
-        f"🆔 ID: <code>{db_user.user_id}</code>\n"
-        f"👤 Ism: {esc(db_user.full_name)}\n"
-        f"📊 Status: {status}\n"
-        f"🎬 Ko'rilgan: {format_number(db_user.movies_watched)}\n\n"
-        f"🔗 <b>Referal:</b>\n"
-        f"Kod: <code>{db_user.referral_code}</code>\n"
-        f"Taklif qilganlar: {referrals_count} ta\n\n"
-        f"📎 Havolangiz:\n"
-        f"https://t.me/{bot_username}?start={db_user.referral_code}",
+        await get_message_text(
+            'profile_info',
+            user_id=db_user.user_id,
+            full_name=esc(db_user.full_name),
+            status=status,
+            premium_status=status,
+            movies_watched=format_number(db_user.movies_watched),
+            referral_code=db_user.referral_code,
+            referrals_count=referrals_count,
+            bot_username=bot_username,
+            joined_date=format_date(db_user.created_at),
+        ),
         reply_markup=back_kb()
     )
 

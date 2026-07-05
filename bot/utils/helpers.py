@@ -176,6 +176,19 @@ def get_confirmed_channel_ids(user_id: int) -> set:
 
 
 @sync_to_async
+def get_message_text(message_type: str, **kwargs) -> str:
+    """Admin tahrirlaydigan xabar shablonini olish (MessageTemplate).
+
+    Placeholder qiymatlarini {key} bo'yicha almashtiradi. Shablon topilmasa
+    _get_default_message'ga tushadi. HTML parse_mode ishlatilgani uchun
+    foydalanuvchi kiritgan qiymatlar (ism, kino nomi) CHAQIRUVDAN OLDIN esc()
+    bilan uzatilishi kerak (get_message oddiy str.replace qiladi).
+    """
+    from apps.core.models import MessageTemplate
+    return MessageTemplate.get_message(message_type, **kwargs)
+
+
+@sync_to_async
 def get_channel_by_tg_id(tg_chat_id: int):
     """Telegram chat id bo'yicha aktiv majburiy kanalni topish (join request uchun)."""
     return Channel.objects.filter(channel_id=tg_chat_id, is_active=True).first()

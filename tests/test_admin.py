@@ -315,3 +315,52 @@ class TestAdminStates:
         states = ['channel_input', 'title']
         for state in states:
             assert hasattr(AddChannelState, state)
+
+
+class TestMessageTemplates:
+    """Xabar shablonlari: tahrirlash bot ko'rsatadigan matnга ta'sir qiladi"""
+
+    def test_edit_changes_get_message(self):
+        """Shablon tahrirlanganda get_message YANGI matnni qaytaradi (bot shuni ishlatadi)"""
+        from apps.core.models import MessageTemplate
+
+        MessageTemplate.objects.update_or_create(
+            message_type='movie_not_found',
+            defaults={'title': 'Kino topilmadi', 'content': 'MENING YANGI MATNIM {code}'},
+        )
+        result = MessageTemplate.get_message('movie_not_found', code='999')
+        assert result == 'MENING YANGI MATNIM 999'
+
+    def test_placeholder_substitution(self):
+        """{placeholder} qiymatlar bilan almashadi, literal qolmaydi"""
+        from apps.core.models import MessageTemplate
+
+        MessageTemplate.objects.update_or_create(
+            message_type='welcome',
+            defaults={'title': 'Salom', 'content': '👋 {full_name}!\n{status}Xush kelibsiz'},
+        )
+        result = MessageTemplate.get_message('welcome', full_name='Ali', status='💎 Premium\n')
+        assert 'Ali' in result
+        assert '💎 Premium' in result
+        assert '{full_name}' not in result and '{status}' not in result
+
+    def test_missing_template_uses_default(self):
+        """Shablon DB'da yo'q bo'lsa _get_default_message ishlaydi (literal qolmaydi)"""
+        from apps.core.models import MessageTemplate
+
+        MessageTemplate.objects.filter(message_type='search_prompt').delete()
+        result = MessageTemplate.get_message('search_prompt')
+        assert 'qidir' in result.lower()
+
+    def test_get_message_text_helper(self):
+        """bot.utils.get_message_text (@sync_to_async) asl funksiya orqali ishlaydi"""
+        from bot.utils import get_message_text
+        from apps.core.models import MessageTemplate
+
+        MessageTemplate.objects.update_or_create(
+            message_type='payment_rejected',
+            defaults={'title': 'Rad', 'content': 'Rad etildi: {reason}'},
+        )
+        # @sync_to_async ostidagi asl sync funksiya
+        result = get_message_text.func('payment_rejected', reason='sabab')
+        assert result == 'Rad etildi: sabab'
