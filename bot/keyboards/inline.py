@@ -21,12 +21,12 @@ def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
 
 
 def _channel_emoji(channel) -> str:
-    """Kanal turiga qarab emoji."""
-    ctype = getattr(channel, 'channel_type', '')
-    if ctype == 'instagram':
-        return "📸"
-    if ctype == 'external':
-        return "🌐"
+    """Kanal turiga qarab emoji.
+
+    Instagram/tashqi kanallar ham 📢 bilan ko'rsatiladi - Telegram kanallardan
+    farq qilmasligi (Instagram ekani bilinmasligi) uchun. Foydalanuvchi havolani
+    bosganda o'zi ochilgan sahifani ko'radi.
+    """
     return "📢"
 
 
@@ -68,22 +68,16 @@ def subscription_prompt_text(channels: list, confirming: bool = False) -> str:
     """
     if confirming:
         return (
-            "📸 <b>Instagram sahifamizga obuna bo'ling</b>\n\n"
-            "Yuqoridagi <b>Instagram havolasiga</b> o'ting, obuna bo'ling va shu yerga qayting.\n\n"
+            "📢 <b>Sahifamizga obuna bo'ling</b>\n\n"
+            "Yuqoridagi <b>havolaga</b> o'ting, obuna bo'ling va shu yerga qayting.\n\n"
             "So'ng yana <b>«🔄 Tekshirish»</b> tugmasini bosing."
         )
 
-    has_non_checkable = bool(channels) and any(
-        not getattr(c, 'is_checkable', True) for c in channels
+    text = (
+        "📢 <b>Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:</b>\n\n"
+        "Ro'yxatdagi barcha kanal va sahifalarga obuna bo'lib, "
+        "<b>🔄 Tekshirish</b> tugmasini bosing."
     )
-
-    text = "📢 <b>Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:</b>\n\n"
-    if has_non_checkable:
-        text += (
-            "• Telegram kanallariga obuna bo'ling.\n"
-            "• Instagram/tashqi sahifaga o'ting va obuna bo'ling.\n\n"
-        )
-    text += "So'ng <b>🔄 Tekshirish</b> tugmasini bosing."
     return text
 
 

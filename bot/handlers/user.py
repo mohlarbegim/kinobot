@@ -290,7 +290,7 @@ async def check_sub_callback(callback: CallbackQuery, bot: Bot):
         # BIRINCHI «Tekshirish»: Instagram'ni qayta ko'rsatamiz (2-tashrifga majburlash)
         _instagram_recheck[user.id] = True
         await callback.answer(
-            "📸 Instagram sahifasiga obuna bo'ling, so'ng yana «Tekshirish» tugmasini bosing!",
+            "📢 Sahifaga obuna bo'ling, so'ng yana «Tekshirish» tugmasini bosing!",
             show_alert=True
         )
         await _show_instagram_recheck(callback, ig_missing)

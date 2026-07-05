@@ -28,6 +28,7 @@ class AddChannelState(StatesGroup):
     """Kanal qo'shish holatlari"""
     channel_input = State()
     title = State()
+    name = State()  # Instagram/tashqi sahifa uchun ko'rinadigan nom (Instagram ekani bilinmasin)
 
 
 class EditSettingsState(StatesGroup):

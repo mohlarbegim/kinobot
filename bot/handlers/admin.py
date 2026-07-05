@@ -1581,23 +1581,18 @@ async def add_channel_input(message: Message, state: FSMContext, bot: Bot):
             # Instagram username olish
             parts = text.rstrip("/").split("/")
             username = parts[-1] if parts else ""
-            title = f"Instagram: @{username}"
             invite_link = text if text.startswith("http") else f"https://instagram.com/{username}"
 
-            await save_channel_with_type(None, username, title, invite_link, "instagram")
-            await state.clear()
-
-            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📢 Kanallar", callback_data="admin:channels")],
-                [InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin:panel")]
-            ])
-
+            # Havolani saqlab, ko'rinadigan NOM so'raymiz. Foydalanuvchilar shu nomni
+            # ko'radi - Instagram ekani va username bilinmasligi uchun oddiy nom.
+            await state.update_data(channel_id=None, username=username, invite_link=invite_link)
+            await state.set_state(AddChannelState.name)
             await message.answer(
-                f"✅ <b>Instagram qo'shildi!</b>\n\n"
-                f"📸 {title}\n"
-                f"🔗 {invite_link}",
-                reply_markup=kb
+                "✏️ <b>Sahifa nomini kiriting</b>\n\n"
+                "Foydalanuvchilar majburiy obuna ro'yxatida <b>shu nomni</b> ko'radi.\n"
+                "Instagram ekani bilinmasligi uchun oddiy nom yozing.\n\n"
+                "Masalan: <code>Rasmiy sahifamiz</code>",
+                reply_markup=cancel_inline_kb()
             )
             return
         else:
@@ -1778,6 +1773,44 @@ async def add_channel_link(message: Message, state: FSMContext):
         f"📢 {data['title']}\n"
         f"🆔 <code>{data['channel_id']}</code>\n"
         f"🔗 {invite_link}",
+        reply_markup=kb
+    )
+
+
+@router.message(AddChannelState.name, IsAdmin())
+async def add_channel_name(message: Message, state: FSMContext):
+    """Instagram/tashqi sahifa uchun foydalanuvchilarga ko'rinadigan nom."""
+    title = message.text.strip() if message.text else ""
+    if not title:
+        await message.answer(
+            "❌ Nom bo'sh bo'lmasligi kerak. Qayta kiriting:",
+            reply_markup=cancel_inline_kb()
+        )
+        return
+
+    data = await state.get_data()
+    channel_type = data.get('channel_type', 'instagram')
+
+    await save_channel_with_type(
+        data.get('channel_id'),
+        data.get('username', ''),
+        title,
+        data.get('invite_link', ''),
+        channel_type
+    )
+    await state.clear()
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Kanallar", callback_data="admin:channels")],
+        [InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin:panel")]
+    ])
+
+    await message.answer(
+        f"✅ <b>Qo'shildi!</b>\n\n"
+        f"📢 {title}\n"
+        f"🔗 {data.get('invite_link', '')}\n\n"
+        f"ℹ️ Foydalanuvchilar «{title}» nomini ko'radi.",
         reply_markup=kb
     )
 

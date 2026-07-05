@@ -322,8 +322,25 @@ class TestChannelsKeyboard:
         assert url_texts[2].startswith('3. ')          # Instagram oxirgi raqam
         assert 'IG' in url_texts[2]
 
+    def test_instagram_button_hides_type(self):
+        """Instagram tugmasida 📸 belgisi va 'Instagram' so'zi bo'lmasligi kerak - faqat nom"""
+        from types import SimpleNamespace
+        from bot.keyboards import channels_kb
+
+        ig = SimpleNamespace(id=1, title='Rasmiy sahifamiz',
+                             invite_link='https://instagram.com/x',
+                             is_checkable=False, channel_type='instagram')
+        kb = channels_kb([ig])
+        url_texts = [b.text for row in kb.inline_keyboard for b in row if b.url]
+
+        assert len(url_texts) == 1
+        assert '📸' not in url_texts[0]                 # Instagram belgisi yo'q
+        assert 'Instagram' not in url_texts[0]          # "Instagram" so'zi yo'q
+        assert 'Rasmiy sahifamiz' in url_texts[0]       # faqat admin bergan nom
+
+
 class TestSubscriptionPromptText:
-    """subscription_prompt_text - barcha kanallar birga (Telegram + Instagram)"""
+    """subscription_prompt_text - Instagram ekani matnda bilinmasligi kerak"""
 
     def _ns(self, checkable):
         from types import SimpleNamespace
@@ -331,23 +348,22 @@ class TestSubscriptionPromptText:
 
     def test_telegram_only_text(self):
         from bot.keyboards import subscription_prompt_text
-        # Faqat Telegram -> Instagram izohi bo'lmaydi
         text = subscription_prompt_text([self._ns(True)])
         assert 'Tekshirish' in text
         assert 'Instagram' not in text
 
-    def test_mixed_text_mentions_instagram(self):
+    def test_mixed_text_hides_instagram(self):
         from bot.keyboards import subscription_prompt_text
-        # Aralash (Telegram + Instagram) -> Instagram haqida izoh bor
+        # Aralash (Telegram + Instagram) bo'lsa ham "Instagram" so'zi chiqmasligi kerak
         text = subscription_prompt_text([self._ns(True), self._ns(False)])
-        assert 'Instagram' in text
+        assert 'Instagram' not in text
         assert 'Tekshirish' in text
 
-    def test_confirming_text(self):
+    def test_confirming_text_hides_instagram(self):
         from bot.keyboards import subscription_prompt_text
-        # Ikkinchi tashrif tasdig'i: Instagram havolasiga qayta o'tib «Tekshirish»ni so'raydi
+        # Ikkinchi tashrif tasdig'i: havolaga qayta o'tib «Tekshirish»ni so'raydi (Instagram demasdan)
         text = subscription_prompt_text([self._ns(False)], confirming=True)
-        assert 'Instagram' in text
+        assert 'Instagram' not in text
         assert 'havola' in text.lower()
         assert 'Tekshirish' in text
 
