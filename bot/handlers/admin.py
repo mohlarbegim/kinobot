@@ -2481,12 +2481,16 @@ async def user_view(callback: CallbackQuery):
         f"🕐 Oxirgi faollik: {user.last_active.strftime('%d.%m.%Y %H:%M')}"
     )
 
+    premium_row = [InlineKeyboardButton(text="💎 Premium berish", callback_data=f"user:give_premium:{user.user_id}")]
+    if user.is_premium_active:
+        premium_row.append(InlineKeyboardButton(text="🚫 Premium olib qo'yish", callback_data=f"user:remove_premium:{user.user_id}"))
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="⛔️ Bloklash" if not user.is_banned else "✅ Blokdan chiqarish",
             callback_data=f"user:{'unban' if user.is_banned else 'ban'}:{user.user_id}"
         )],
-        [InlineKeyboardButton(text="💎 Premium berish", callback_data=f"user:give_premium:{user.user_id}")],
+        premium_row,
         [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin:users")]
     ])
 
@@ -2532,6 +2536,7 @@ async def user_give_premium_menu(callback: CallbackQuery):
          InlineKeyboardButton(text="30 kun", callback_data=f"user:add_premium:{user_id}:30")],
         [InlineKeyboardButton(text="90 kun", callback_data=f"user:add_premium:{user_id}:90"),
          InlineKeyboardButton(text="365 kun", callback_data=f"user:add_premium:{user_id}:365")],
+        [InlineKeyboardButton(text="♾ Muddatsiz", callback_data=f"user:add_premium:{user_id}:0")],
         [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"user:view:{user_id}")]
     ])
 
@@ -2552,11 +2557,27 @@ async def user_add_premium(callback: CallbackQuery):
     result = await give_user_premium(user_id, days)
 
     if result:
-        await callback.answer(f"✅ {days} kun premium berildi!", show_alert=True)
+        msg = "✅ Muddatsiz premium berildi!" if days == 0 else f"✅ {days} kun premium berildi!"
+        await callback.answer(msg, show_alert=True)
     else:
         await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
 
     # User view ga qaytish
+    callback.data = f"user:view:{user_id}"
+    await user_view(callback)
+
+
+@router.callback_query(F.data.startswith("user:remove_premium:"), CanManageUsers())
+async def user_remove_premium(callback: CallbackQuery):
+    """Userdan premiumни olib qo'yish"""
+    user_id = int(callback.data.split(":")[2])
+    result = await remove_user_premium(user_id)
+
+    if result:
+        await callback.answer("🚫 Premium olib qo'yildi!", show_alert=True)
+    else:
+        await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
+
     callback.data = f"user:view:{user_id}"
     await user_view(callback)
 
@@ -4475,7 +4496,11 @@ def give_user_premium(user_id: int, days: int) -> bool:
     try:
         user = User.objects.get(user_id=user_id)
 
-        if user.is_premium_active and user.premium_expires:
+        if days == 0:
+            # Muddatsiz premium
+            user.is_premium = True
+            user.premium_expires = None
+        elif user.is_premium_active and user.premium_expires:
             # Mavjud premiumga qo'shish
             user.premium_expires = user.premium_expires + timedelta(days=days)
         else:
@@ -4487,6 +4512,22 @@ def give_user_premium(user_id: int, days: int) -> bool:
         user.premium_expiry_notified = False
         user.save()
         # Cache'ni tozalaymiz, aks holda premium 60s davomida ko'rinmaydi.
+        clear_user_cache(user_id)
+        return True
+    except User.DoesNotExist:
+        return False
+
+
+@sync_to_async
+def remove_user_premium(user_id: int) -> bool:
+    """Userdan premiumни olib qo'yish (bekor qilish)."""
+    try:
+        user = User.objects.get(user_id=user_id)
+        user.is_premium = False
+        user.premium_expires = None
+        user.premium_expiry_notified = False
+        user.save(update_fields=['is_premium', 'premium_expires', 'premium_expiry_notified'])
+        # Cache'ni tozalaymiz, aks holda premium 60s davomida "aktiv" ko'rinadi.
         clear_user_cache(user_id)
         return True
     except User.DoesNotExist:
