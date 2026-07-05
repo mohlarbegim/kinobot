@@ -339,3 +339,37 @@ class TestReferralSystem:
         assert count >= 1
 
         referred.delete()
+
+    def test_referral_bonus_and_notification(self, user_model):
+        """Referral orqali qo'shilganda taklif qiluvchiga bonus + xabar ma'lumoti"""
+        from bot.utils.helpers import get_or_create_user
+        from apps.core.models import BotSettings
+
+        s = BotSettings.get_settings()
+        s.referral_active = True
+        s.referral_bonus = 3
+        s.save()
+
+        referrer = user_model.objects.create(user_id=111222333, username='ref', full_name='R')
+        before = referrer.free_trial_expires
+
+        # @sync_to_async ichidagi asl sync funksiyani chaqiramiz (.func)
+        new_user = get_or_create_user.func(
+            user_id=444555666, username='new', full_name='N',
+            referral_code=referrer.referral_code,
+        )
+
+        referrer.refresh_from_db()
+        # Bonus qo'shildi (trial muddati o'rnatildi/uzaytirildi)
+        assert referrer.free_trial_expires is not None
+        if before is not None:
+            assert referrer.free_trial_expires > before
+        assert new_user.referred_by_id == referrer.id
+        # Taklif qiluvchini xabardor qilish uchun ma'lumot biriktirilgan
+        info = getattr(new_user, '_referral_bonus', None)
+        assert info is not None
+        assert info['referrer_id'] == 111222333
+        assert info['bonus_days'] == 3
+
+        new_user.delete()
+        referrer.delete()

@@ -64,6 +64,14 @@ def get_or_create_user(user_id: int, username: Optional[str], full_name: str, re
                         referrer.free_trial_expires = timezone.now() + timedelta(days=bonus_days)
                     referrer.save(update_fields=['free_trial_expires'])
 
+                    # Taklif qiluvchiga xabar berish uchun ma'lumotni obyektga biriktiramiz
+                    # (bu yerdan Telegram xabar yubora olmaymiz - sync kontekst; cmd_start yuboradi).
+                    user._referral_bonus = {
+                        'referrer_id': referrer.user_id,
+                        'bonus_days': bonus_days,
+                        'referrals_count': referrer.referrals.count(),
+                    }
+
         except User.DoesNotExist:
             pass
 

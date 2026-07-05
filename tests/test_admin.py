@@ -112,6 +112,18 @@ class TestMovieManagement:
         assert s.is_valid(), s.errors
         assert 'file_id' not in s.errors
 
+    @pytest.mark.asyncio
+    async def test_movie_sent_with_protect_content(self):
+        """Yuborilgan kino forward himoyasi (protect_content=True) bilan ketishi kerak"""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from bot.handlers.user import send_movie_or_notice
+
+        tgt = SimpleNamespace(answer=AsyncMock(), answer_video=AsyncMock())
+        movie = SimpleNamespace(file_id='BAAC_movie')
+        await send_movie_or_notice(tgt, movie, "Caption")
+        assert tgt.answer_video.call_args.kwargs.get('protect_content') is True
+
     def test_toggle_movie_status(self, db_movie):
         """Test toggle active status"""
         initial = db_movie.is_active

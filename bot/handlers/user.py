@@ -87,10 +87,18 @@ async def send_movie_or_notice(target, movie, caption, reply_markup=None):
     Kino videosini yuboradi. Agar file_id bo'sh bo'lsa (video hali yuklanmagan -
     admin videosiz qo'shgan), video o'rniga matnli xabar yuboradi (crash bo'lmaydi).
 
+    protect_content=True: foydalanuvchi videoni boshqa chatga forward qila olmaydi
+    va yuklab (save) tarqata olmaydi (kontent himoyasi).
+
     target: Message yoki callback.message (ikkalasida ham answer_video/answer bor).
     """
     if movie.file_id:
-        await target.answer_video(video=movie.file_id, caption=caption, reply_markup=reply_markup)
+        await target.answer_video(
+            video=movie.file_id,
+            caption=caption,
+            reply_markup=reply_markup,
+            protect_content=True,
+        )
     else:
         await target.answer(
             f"{caption}\n\n⚠️ <i>Video hali yuklanmagan.</i>",
@@ -135,6 +143,22 @@ async def cmd_start(message: Message, bot: Bot):
         full_name=user.full_name,
         referral_code=referral_code
     )
+
+    # Referal bonus berilgan bo'lsa - taklif qiluvchini xabardor qilamiz (motivatsiya)
+    ref_bonus = getattr(db_user, '_referral_bonus', None)
+    if ref_bonus:
+        try:
+            await bot.send_message(
+                ref_bonus['referrer_id'],
+                f"🎁 <b>Yangi do'st taklif qildingiz!</b>\n\n"
+                f"👤 {esc(user.full_name)} sizning havolangiz orqali qo'shildi.\n"
+                f"➕ Sizga <b>{ref_bonus['bonus_days']} kun</b> qo'shildi.\n"
+                f"👥 Jami taklif qilganlaringiz: <b>{ref_bonus['referrals_count']} ta</b>\n\n"
+                f"Ko'proq do'st taklif qiling — ko'proq bonus oling! 🚀"
+            )
+        except Exception as e:
+            # Taklif qiluvchi botni bloklagan bo'lishi mumkin - jim o'tamiz
+            logger.info(f"Referal bonus xabari yuborilmadi (referrer={ref_bonus['referrer_id']}): {e}")
 
     not_subscribed = await check_subscription(bot, user.id)
 
@@ -480,7 +504,8 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
                 chat_id=callback.from_user.id,
                 video=movie.file_id,
                 caption=f"🎬 <b>{esc(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>",
-                reply_markup=movie_action_kb(movie.code, is_saved)
+                reply_markup=movie_action_kb(movie.code, is_saved),
+                protect_content=True,
             )
         else:
             await callback.message.answer(
@@ -705,7 +730,8 @@ async def premium_movies_callback(callback: CallbackQuery, db_user: User = None)
         try:
             await callback.message.answer_video(
                 video=movie.file_id,
-                caption=f"📝 Kod: <code>{esc(movie.code)}</code>"
+                caption=f"📝 Kod: <code>{esc(movie.code)}</code>",
+                protect_content=True,
             )
         except Exception:
             pass
