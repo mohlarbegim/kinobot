@@ -1041,6 +1041,7 @@ async def add_movie_confirm(callback: CallbackQuery, state: FSMContext, db_user:
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔔 Foydalanuvchilarga xabar berish", callback_data=f"notify_movie:{movie.code}")],
         [InlineKeyboardButton(text="➕ Yana qo'shish", callback_data="admin:add_movie")],
         [InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin:panel")]
     ])
@@ -1058,6 +1059,79 @@ async def add_movie_confirm(callback: CallbackQuery, state: FSMContext, db_user:
         reply_markup=kb
     )
     await callback.answer("✅ Kino qo'shildi!")
+
+
+# ==================== YANGI KINO BILDIRISHNOMASI ====================
+
+@router.callback_query(F.data.startswith("notify_movie:"), CanAddMovies())
+async def notify_movie_confirm(callback: CallbackQuery):
+    """Yangi kino haqida xabar yuborishни tasdiqlash (ommaviy yuborish oldidan)."""
+    code = callback.data.split(":", 1)[1]
+    movie = await get_movie_by_code(code)
+    if not movie:
+        await callback.answer("❌ Kino topilmadi", show_alert=True)
+        return
+
+    total = await count_active_users()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"✅ Ha, yuborish ({total})", callback_data=f"notify_go:{code}")],
+        [InlineKeyboardButton(text="⬅️ Bekor qilish", callback_data="admin:panel")],
+    ])
+    await callback.message.edit_text(
+        f"🔔 <b>Yangi kino bildirishnomasi</b>\n\n"
+        f"🎬 {esc(movie.display_title)} (kod: <code>{movie.code}</code>)\n\n"
+        f"Bu xabar <b>{total}</b> ta faol foydalanuvchiga yuboriladi. Tasdiqlaysizmi?",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("notify_go:"), CanAddMovies())
+async def notify_movie_send(callback: CallbackQuery, bot: Bot = None):
+    """Yangi kino haqida barcha faol userlarga xabar yuborish (rate-limited)."""
+    import asyncio
+    code = callback.data.split(":", 1)[1]
+    movie = await get_movie_by_code(code)
+    if not movie:
+        await callback.answer("❌ Kino topilmadi", show_alert=True)
+        return
+
+    users = await get_active_user_ids()
+    await callback.message.edit_text(f"🔔 Yuborilmoqda... 0/{len(users)}")
+    await callback.answer()
+
+    premium_note = "💎 <i>Premium kino</i>\n" if movie.is_premium else ""
+    text = (
+        f"🆕 <b>Yangi kino qo'shildi!</b>\n\n"
+        f"🎬 <b>{esc(movie.display_title)}</b>\n"
+        f"{premium_note}"
+        f"📝 Kod: <code>{esc(movie.code)}</code>\n\n"
+        f"Ko'rish uchun kodni yuboring 👆"
+    )
+
+    sent = 0
+    failed = 0
+    for uid in users:
+        try:
+            await bot.send_message(uid, text)
+            sent += 1
+        except Exception:
+            failed += 1
+        if (sent + failed) % 20 == 0:
+            try:
+                await callback.message.edit_text(f"🔔 Yuborilmoqda... {sent + failed}/{len(users)}")
+            except TelegramBadRequest:
+                pass
+        await asyncio.sleep(0.05)  # Rate limit
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin:panel")]
+    ])
+    await callback.message.edit_text(
+        f"✅ <b>Bildirishnoma yuborildi!</b>\n\n"
+        f"📊 Jami: {len(users)}\n✅ Yuborildi: {sent}\n❌ Xato: {failed}",
+        reply_markup=kb
+    )
 
 
 @router.callback_query(F.data == "cancel", IsAdmin())
@@ -1682,6 +1756,54 @@ async def payments_menu(callback: CallbackQuery):
             caption=text,
             reply_markup=payment_confirm_kb(payment.id)
         )
+
+
+# ==================== KINO SO'ROVLARI ====================
+
+@router.callback_query(F.data == "admin:requests", IsAdmin())
+async def movie_requests_menu(callback: CallbackQuery):
+    """Foydalanuvchi kino so'rovlari (kutilayotganlar)."""
+    requests = await get_pending_requests()
+
+    if not requests:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin:panel")]
+        ])
+        try:
+            await callback.message.edit_text("📭 Kutilayotgan kino so'rovlari yo'q.", reply_markup=kb)
+        except TelegramBadRequest:
+            pass
+        await callback.answer()
+        return
+
+    text = f"🙋 <b>Kino so'rovlari</b> (kutilmoqda: {len(requests)})\n\n"
+    rows = []
+    for req in requests:
+        text += (
+            f"🎬 <b>{esc(req.title)}</b>\n"
+            f"👤 <code>{req.user.user_id}</code> • 📅 {req.created_at.strftime('%d.%m %H:%M')}\n\n"
+        )
+        rows.append([InlineKeyboardButton(
+            text=f"✅ Bajarildi: {req.title[:25]}",
+            callback_data=f"admin:req_done:{req.id}"
+        )])
+    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin:panel")])
+
+    try:
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    except TelegramBadRequest:
+        pass  # ikki marta bosish - "message is not modified"
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:req_done:"), IsAdmin())
+async def movie_request_done(callback: CallbackQuery):
+    """So'rovni 'bajarildi' deb belgilash."""
+    req_id = int(callback.data.split(":")[2])
+    await mark_request_done(req_id)
+    await callback.answer("✅ Bajarildi deb belgilandi!", show_alert=True)
+    # Ro'yxatni yangilash
+    await movie_requests_menu(callback)
 
 
 # ==================== KANALLAR ====================
@@ -3411,6 +3533,18 @@ def get_broadcast_users(target, is_ad):
 
 
 @sync_to_async
+def count_active_users():
+    """Faol (bloklanmagan) foydalanuvchilar soni."""
+    return User.objects.filter(is_banned=False).count()
+
+
+@sync_to_async
+def get_active_user_ids():
+    """Bildirishnoma uchun barcha faol foydalanuvchilarning Telegram ID lari."""
+    return list(User.objects.filter(is_banned=False).values_list('user_id', flat=True))
+
+
+@sync_to_async
 def update_broadcast_total(broadcast_id, total):
     Broadcast.objects.filter(id=broadcast_id).update(total_users=total)
 
@@ -3428,6 +3562,22 @@ def complete_broadcast(broadcast_id, sent, failed):
 @sync_to_async
 def get_pending_payments():
     return list(Payment.objects.filter(status='pending').select_related('user', 'tariff').order_by('-created_at')[:10])
+
+
+@sync_to_async
+def get_pending_requests():
+    from apps.movies.models import MovieRequest
+    return list(
+        MovieRequest.objects.filter(status='pending')
+        .select_related('user')
+        .order_by('-created_at')[:15]
+    )
+
+
+@sync_to_async
+def mark_request_done(request_id: int):
+    from apps.movies.models import MovieRequest
+    MovieRequest.objects.filter(id=request_id).update(status='done')
 
 
 @sync_to_async

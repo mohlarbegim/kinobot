@@ -18,9 +18,11 @@ from bot.keyboards import (
     main_menu_inline_kb, channels_kb, subscription_prompt_text, categories_kb, movies_kb,
     tariffs_kb, back_kb, movie_action_kb, saved_movies_kb,
     search_filter_kb, filter_country_kb, filter_language_kb, filter_year_kb,
-    flash_sale_tariffs_kb, filter_movies_kb, apply_discount
+    flash_sale_tariffs_kb, filter_movies_kb, apply_discount,
+    profile_kb, history_movies_kb
 )
 from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, remove_channel_membership, get_message_text, compute_missing_channels, esc
+from bot.states import MovieRequestState
 from apps.payments.models import PendingPaymentSession
 from datetime import timedelta
 from django.utils import timezone as dj_timezone
@@ -135,8 +137,11 @@ async def check_user_subscription(bot: Bot, user_id: int, db_user: User = None) 
 # ==================== START ====================
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, bot: Bot):
+async def cmd_start(message: Message, bot: Bot, state: FSMContext = None):
     """Start buyrug'i"""
+    # Har qanday ochiq FSM holatini tozalaymiz (masalan yarim qolgan kino so'rovi)
+    if state is not None:
+        await state.clear()
     user = message.from_user
 
     referral_code = None
@@ -343,8 +348,11 @@ async def _show_instagram_recheck(callback: CallbackQuery, ig_channels: list):
 # ==================== BACK TO MENU ====================
 
 @router.callback_query(F.data == "back_to_menu")
-async def back_to_menu_callback(callback: CallbackQuery):
+async def back_to_menu_callback(callback: CallbackQuery, state: FSMContext):
     """Menyuga qaytish"""
+    # Har qanday ochiq FSM holatini tozalaymiz (masalan kino so'rovi) - aks holda
+    # StateFilter(None) tufayli keyingi kino kodi ishlamay qolardi.
+    await state.clear()
     is_admin = await is_user_admin(callback.from_user.id)
 
     try:
@@ -446,22 +454,25 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
             f"{country_text}"
             f"📺 Sifat: {movie.get_quality_display()}\n"
             f"🌐 Til: {movie.get_language_display()}\n"
+            f"👍 Yoqtirishlar: {format_number(movie.likes)}\n"
             f"👁 Ko'rishlar: {format_number(movie.views)}\n\n"
             f"🤖 <b>Bot:</b> {bot_link}"
         )
 
-        # Saqlangan yoki yo'qligini tekshirish
+        # Saqlangan / yoqtirilgan holatini tekshirish
         is_saved = await check_movie_saved(user_id, movie.code) if db_user else False
+        is_liked = await check_movie_liked(user_id, movie.code) if db_user else False
 
         await send_movie_or_notice(
             message, movie, caption,
-            movie_action_kb(movie.code, is_saved)
+            movie_action_kb(movie.code, is_saved, movie.likes, is_liked)
         )
 
-        # Update stats
+        # Update stats + ko'rish tarixi
         await increment_movie_views(movie.id)
         if db_user:
             await increment_user_movies(db_user.user_id)
+            await record_watch(db_user.user_id, movie.id)
 
     except TelegramBadRequest as e:
         logger.error(f"Kino yuborishda xatolik (code={code}): {e}")
@@ -502,11 +513,14 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
         await callback.answer("💎 Bu Premium kino! Premium olish uchun menudagi tugmani bosing.", show_alert=True)
         return
 
-    # Ko'rishlar sonini oshirish
+    # Ko'rishlar sonini oshirish + ko'rish tarixi
     await increment_movie_views(movie.id)
+    if db_user:
+        await record_watch(db_user.user_id, movie.id)
 
-    # Saqlanganmi tekshirish
+    # Saqlangan / yoqtirilgan holati
     is_saved = await check_movie_saved(callback.from_user.id, movie.code) if db_user else False
+    is_liked = await check_movie_liked(callback.from_user.id, movie.code) if db_user else False
 
     # Kino yuborish
     try:
@@ -515,13 +529,13 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
                 chat_id=callback.from_user.id,
                 video=movie.file_id,
                 caption=f"🎬 <b>{esc(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>",
-                reply_markup=movie_action_kb(movie.code, is_saved),
+                reply_markup=movie_action_kb(movie.code, is_saved, movie.likes, is_liked),
                 protect_content=True,
             )
         else:
             await callback.message.answer(
                 f"🎬 <b>{esc(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>\n\n⚠️ Video fayl topilmadi.",
-                reply_markup=movie_action_kb(movie.code, is_saved)
+                reply_markup=movie_action_kb(movie.code, is_saved, movie.likes, is_liked)
             )
     except TelegramBadRequest as e:
         await callback.answer(f"❌ Xatolik: Video yuborib bo'lmadi.", show_alert=True)
@@ -677,7 +691,7 @@ async def top_movies_callback(callback: CallbackQuery):
     text = "🔥 <b>Top 10 kinolar:</b>\n\n"
     for i, movie in enumerate(movies, 1):
         text += f"{i}. 🎬 <b>{esc(movie.display_title)}</b>\n"
-        text += f"    📝 Kod: <code>{esc(movie.code)}</code> • 👁 {format_number(movie.views)}\n\n"
+        text += f"    📝 Kod: <code>{esc(movie.code)}</code> • 👍 {format_number(movie.likes)} • 👁 {format_number(movie.views)}\n\n"
 
     text += "📥 Kino olish uchun kodini yuboring."
 
@@ -697,7 +711,7 @@ async def top_movies_handler(message: Message):
     text = "🔥 <b>Top 10 kinolar:</b>\n\n"
     for i, movie in enumerate(movies, 1):
         text += f"{i}. 🎬 <b>{esc(movie.display_title)}</b>\n"
-        text += f"    📝 Kod: <code>{esc(movie.code)}</code> • 👁 {format_number(movie.views)}\n\n"
+        text += f"    📝 Kod: <code>{esc(movie.code)}</code> • 👍 {format_number(movie.likes)} • 👁 {format_number(movie.views)}\n\n"
 
     text += "📥 Kino olish uchun kodini yuboring."
 
@@ -1287,7 +1301,7 @@ async def profile_callback(callback: CallbackQuery, db_user: User = None):
 
     await callback.message.edit_text(
         await _build_profile_text(db_user, callback.bot),
-        reply_markup=back_kb()
+        reply_markup=profile_kb()
     )
     await callback.answer()
 
@@ -1301,8 +1315,134 @@ async def profile_handler(message: Message, db_user: User = None):
 
     await message.answer(
         await _build_profile_text(db_user, message.bot),
+        reply_markup=profile_kb()
+    )
+
+
+@router.callback_query(F.data == "watch_history")
+async def watch_history_callback(callback: CallbackQuery, db_user: User = None):
+    """Ko'rilgan kinolar ro'yxati"""
+    if not db_user:
+        await callback.answer("❌ Xatolik!", show_alert=True)
+        return
+
+    movies, total_pages = await get_watch_history(db_user.user_id, page=1)
+    try:
+        if not movies:
+            await callback.message.edit_text(
+                "📭 Hali kino ko'rmagansiz.\n\n🔍 Kino kodini yuboring yoki qidiring.",
+                reply_markup=profile_kb()
+            )
+        else:
+            await callback.message.edit_text(
+                "📜 <b>Ko'rilgan kinolar:</b>\n\nKo'rish uchun kinoni tanlang:",
+                reply_markup=history_movies_kb(movies, page=1, total_pages=total_pages)
+            )
+    except TelegramBadRequest:
+        pass  # bir xil xabar qayta bosildi
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("hist_page:"))
+async def history_page_callback(callback: CallbackQuery, db_user: User = None):
+    """Ko'rilgan kinolar sahifalash"""
+    if not db_user:
+        await callback.answer("❌ Xatolik!", show_alert=True)
+        return
+
+    page = int(callback.data.split(":")[1])
+    movies, total_pages = await get_watch_history(db_user.user_id, page=page)
+    try:
+        await callback.message.edit_text(
+            "📜 <b>Ko'rilgan kinolar:</b>\n\nKo'rish uchun kinoni tanlang:",
+            reply_markup=history_movies_kb(movies, page=page, total_pages=total_pages)
+        )
+    except TelegramBadRequest:
+        pass  # bir xil sahifa qayta bosildi - "message is not modified"
+    await callback.answer()
+
+
+# ==================== KINO SO'ROVI ====================
+
+MAX_REQUEST_LENGTH = 100
+
+
+@router.callback_query(F.data == "request_movie")
+async def request_movie_callback(callback: CallbackQuery, state: FSMContext):
+    """Kino so'rash tugmasi -> nom so'raladi"""
+    await state.set_state(MovieRequestState.title)
+    await callback.message.edit_text(
+        "🙋 <b>Kino so'rash</b>\n\n"
+        "Qidirayotgan kino nomini yozing (yil bilan bo'lса aniqroq):\n"
+        "<i>Masalan: Titanik 1997</i>",
         reply_markup=back_kb()
     )
+    await callback.answer()
+
+
+@router.message(Command("sorov"))
+async def request_movie_command(message: Message, state: FSMContext, db_user: User = None):
+    """/sorov <nom> - kino so'rovi"""
+    parts = message.text.split(maxsplit=1)
+    if len(parts) > 1:
+        await _save_movie_request(message, parts[1].strip(), db_user)
+        await state.clear()
+    else:
+        await state.set_state(MovieRequestState.title)
+        await message.answer(
+            "🙋 <b>Kino so'rash</b>\n\n"
+            "Qidirayotgan kino nomini yozing:\n"
+            "<i>Masalan: Titanik 1997</i>",
+            reply_markup=back_kb()
+        )
+
+
+@router.message(MovieRequestState.title, F.text)
+async def request_movie_input(message: Message, state: FSMContext, db_user: User = None, bot: Bot = None):
+    """Kino so'rovi nomini qabul qilish.
+
+    Agar foydalanuvchi so'rov holatidan chiqmasdan RAQAMLI kod yuborsa, bu kino
+    kodi (so'rov emas) - kinoni ko'rsatamiz. Aks holda so'rov sifatida saqlaymiz.
+    Bu holatда qolib ketsa ham kod har doim ishlashini kafolatlaydi.
+    """
+    await state.clear()
+    text = message.text.strip()
+    if text.isdigit() and len(text) <= MAX_MOVIE_CODE_LENGTH:
+        await get_movie_by_code(message, db_user=db_user, bot=bot)
+        return
+    await _save_movie_request(message, text, db_user)
+
+
+async def _save_movie_request(message: Message, title: str, db_user):
+    """Kino so'rovини saqlash + javob."""
+    if not db_user:
+        await message.answer("❌ Avval /start bosing.")
+        return
+    title = title.strip()
+    if not title or len(title) > MAX_REQUEST_LENGTH:
+        await message.answer(
+            f"❌ Nom 1-{MAX_REQUEST_LENGTH} belgidan iborat bo'lishi kerak.",
+            reply_markup=back_kb()
+        )
+        return
+    await create_movie_request(db_user.user_id, title)
+    await message.answer(
+        "✅ <b>So'rovingiz qabul qilindi!</b>\n\n"
+        f"🎬 <i>{esc(title)}</i>\n\n"
+        "Kino qo'shilса, bildirishnomani ko'rasiz. Rahmat! 🙏",
+        reply_markup=back_kb()
+    )
+
+
+@sync_to_async
+def create_movie_request(user_id: int, title: str):
+    """Kino so'rovini saqlash"""
+    from apps.movies.models import MovieRequest
+    try:
+        user = User.objects.get(user_id=user_id)
+    except User.DoesNotExist:
+        return None
+    return MovieRequest.objects.create(user=user, title=title[:255])
 
 
 # ==================== NOOP ====================
@@ -1379,10 +1519,11 @@ async def save_movie_callback(callback: CallbackQuery, db_user: User = None):
 
     if result:
         await callback.answer("❤️ Kino saqlandi!", show_alert=True)
-        # Tugmani yangilash
+        # Tugmani yangilash (like holatini saqlab)
+        likes, is_liked, _ = await get_movie_action_state(db_user.user_id, movie_code)
         try:
             await callback.message.edit_reply_markup(
-                reply_markup=movie_action_kb(movie_code, is_saved=True)
+                reply_markup=movie_action_kb(movie_code, is_saved=True, likes=likes, is_liked=is_liked)
             )
         except TelegramBadRequest as e:
             logger.debug(f"Tugmani yangilashda xatolik: {e}")
@@ -1408,15 +1549,51 @@ async def unsave_movie_callback(callback: CallbackQuery, db_user: User = None):
 
     if result:
         await callback.answer("💔 Saqlanganlardan o'chirildi!", show_alert=True)
-        # Tugmani yangilash
+        # Tugmani yangilash (like holatini saqlab)
+        likes, is_liked, _ = await get_movie_action_state(db_user.user_id, movie_code)
         try:
             await callback.message.edit_reply_markup(
-                reply_markup=movie_action_kb(movie_code, is_saved=False)
+                reply_markup=movie_action_kb(movie_code, is_saved=False, likes=likes, is_liked=is_liked)
             )
         except TelegramBadRequest as e:
             logger.debug(f"Tugmani yangilashda xatolik: {e}")
     else:
         await callback.answer("❌ Xatolik!", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("like:"))
+async def like_callback(callback: CallbackQuery, db_user: User = None):
+    """Kinoni yoqtirish/bekor qilish (toggle)."""
+    if not db_user:
+        await callback.answer("❌ Avval ro'yxatdan o'ting!", show_alert=True)
+        return
+
+    movie_code = callback.data.split(":")[1]
+    if not movie_code.isdigit() or len(movie_code) > MAX_MOVIE_CODE_LENGTH:
+        await callback.answer("❌ Noto'g'ri kod!", show_alert=True)
+        return
+
+    try:
+        liked, likes = await toggle_movie_like(db_user.user_id, movie_code)
+    except Exception as e:
+        # Kamdan-kam: bir vaqtda ikki marta bosish -> unique constraint poygasi
+        logger.debug(f"Like toggle poyga xatosi: {e}")
+        await callback.answer("⏳ Qayta urinib ko'ring.")
+        return
+    if liked is None:
+        await callback.answer("❌ Kino topilmadi!", show_alert=True)
+        return
+
+    # Tugmani yangilash (saqlangan holatini saqlab)
+    _, _, is_saved = await get_movie_action_state(db_user.user_id, movie_code)
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=movie_action_kb(movie_code, is_saved=is_saved, likes=likes, is_liked=liked)
+        )
+    except TelegramBadRequest as e:
+        logger.debug(f"Like tugmasini yangilashda xatolik: {e}")
+
+    await callback.answer("👍 Yoqtirdingiz!" if liked else "Bekor qilindi")
 
 
 @router.callback_query(F.data.startswith("saved_movie:"))
@@ -1443,6 +1620,7 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
         desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
 
+        is_liked = await check_movie_liked(db_user.user_id, movie.code) if db_user else False
         await send_movie_or_notice(
             callback.message, movie,
             (
@@ -1450,12 +1628,14 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
                 f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
                 f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n"
-                f"👁 {format_number(movie.views)}\n\n"
+                f"👍 {format_number(movie.likes)} • 👁 {format_number(movie.views)}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
             ),
-            movie_action_kb(movie.code, is_saved=True)
+            movie_action_kb(movie.code, is_saved=True, likes=movie.likes, is_liked=is_liked)
         )
         await increment_movie_views(movie.id)
+        if db_user:
+            await record_watch(db_user.user_id, movie.id)
     except TelegramBadRequest:
         await callback.message.answer("❌ Xatolik.", reply_markup=back_kb())
 
@@ -1489,6 +1669,7 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
         desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
         is_saved = await check_movie_saved(user_id, movie.code) if db_user else False
+        is_liked = await check_movie_liked(user_id, movie.code) if db_user else False
 
         await send_movie_or_notice(
             callback.message, movie,
@@ -1499,9 +1680,11 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
             ),
-            movie_action_kb(movie.code, is_saved)
+            movie_action_kb(movie.code, is_saved, movie.likes, is_liked)
         )
         await increment_movie_views(movie.id)
+        if db_user:
+            await record_watch(db_user.user_id, movie.id)
     except TelegramBadRequest as e:
         logger.error(f"Random callback xatolik: {e}")
         await callback.message.answer("❌ Xatolik.", reply_markup=back_kb())
@@ -1593,7 +1776,8 @@ def search_movies_by_name(query: str, limit: int = 10):
 
 @sync_to_async
 def get_top_movies(limit=10):
-    return list(Movie.objects.filter(is_active=True).order_by('-views')[:limit])
+    # Avval yoqtirishlar (ijtimoiy isbot), keyin ko'rishlar bo'yicha
+    return list(Movie.objects.filter(is_active=True).order_by('-likes', '-views')[:limit])
 
 
 @sync_to_async
@@ -1695,6 +1879,81 @@ def increment_movie_views(movie_id):
 def increment_user_movies(user_id):
     from django.db.models import F
     User.objects.filter(user_id=user_id).update(movies_watched=F('movies_watched') + 1)
+
+
+@sync_to_async
+def toggle_movie_like(user_id: int, movie_code: str):
+    """Kinoni yoqtirish/bekor qilish (toggle). Qaytaradi: (liked: bool|None, likes: int)."""
+    from apps.movies.models import MovieLike
+    from django.db import transaction
+    from django.db.models import F
+    try:
+        user = User.objects.get(user_id=user_id)
+        movie = Movie.objects.get(code=movie_code)
+    except (User.DoesNotExist, Movie.DoesNotExist):
+        return None, 0
+
+    with transaction.atomic():
+        obj, created = MovieLike.objects.get_or_create(user=user, movie=movie)
+        if created:
+            Movie.objects.filter(pk=movie.pk).update(likes=F('likes') + 1)
+            liked = True
+        else:
+            obj.delete()
+            # Manfiy bo'lib ketmasligi uchun 0 dan pastga tushirmaymiz
+            Movie.objects.filter(pk=movie.pk, likes__gt=0).update(likes=F('likes') - 1)
+            liked = False
+        movie.refresh_from_db(fields=['likes'])
+    return liked, movie.likes
+
+
+@sync_to_async
+def check_movie_liked(user_id: int, movie_code: str) -> bool:
+    """Foydalanuvchi bu kinoni yoqtirganmi."""
+    from apps.movies.models import MovieLike
+    try:
+        return MovieLike.objects.filter(user__user_id=user_id, movie__code=movie_code).exists()
+    except Exception:
+        return False
+
+
+@sync_to_async
+def get_movie_action_state(user_id: int, movie_code: str):
+    """Tugmani qayta qurish uchun (likes, is_liked, is_saved) — like/save holatini
+    birga yangilash, biror amaldan keyin ikkinchisi yo'qolmasligi uchun."""
+    from apps.movies.models import MovieLike, SavedMovie
+    try:
+        movie = Movie.objects.get(code=movie_code)
+    except Movie.DoesNotExist:
+        return 0, False, False
+    is_liked = MovieLike.objects.filter(user__user_id=user_id, movie=movie).exists()
+    is_saved = SavedMovie.objects.filter(user__user_id=user_id, movie=movie).exists()
+    return movie.likes, is_liked, is_saved
+
+
+@sync_to_async
+def record_watch(user_id: int, movie_id: int):
+    """Ko'rish tarixiga yozish (qayta ko'rilса watched_at yangilanadi)."""
+    from apps.movies.models import WatchHistory
+    try:
+        user = User.objects.get(user_id=user_id)
+    except User.DoesNotExist:
+        return
+    obj, created = WatchHistory.objects.get_or_create(user=user, movie_id=movie_id)
+    if not created:
+        obj.save(update_fields=['watched_at'])  # auto_now -> vaqtni yangilaydi
+
+
+@sync_to_async
+def get_watch_history(user_id: int, page: int = 1, per_page: int = 8):
+    """Foydalanuvchining ko'rgan kinolari (eng oxirgisi birinchi)."""
+    from apps.movies.models import WatchHistory
+    qs = WatchHistory.objects.filter(user__user_id=user_id).select_related('movie').order_by('-watched_at')
+    total = qs.count()
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    start = (page - 1) * per_page
+    movies = [h.movie for h in qs[start:start + per_page]]
+    return movies, total_pages
 
 
 @sync_to_async

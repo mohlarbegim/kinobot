@@ -62,6 +62,11 @@ class MovieSearchState(StatesGroup):
     query = State()
 
 
+class MovieRequestState(StatesGroup):
+    """Foydalanuvchi kino so'rovi holatlari"""
+    title = State()
+
+
 class AddCategoryState(StatesGroup):
     """Janr qo'shish holatlari"""
     name = State()

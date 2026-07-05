@@ -11,7 +11,10 @@ def main_menu_inline_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="❤️ Saqlanganlar", callback_data="saved_movies"),
         InlineKeyboardButton(text="💎 Premium", callback_data="premium")
     )
-    builder.row(InlineKeyboardButton(text="👤 Profil", callback_data="profile"))
+    builder.row(
+        InlineKeyboardButton(text="🙋 Kino so'rash", callback_data="request_movie"),
+        InlineKeyboardButton(text="👤 Profil", callback_data="profile")
+    )
 
     # Admin tugmasi
     if is_admin:
@@ -379,9 +382,12 @@ def back_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def movie_action_kb(movie_code: str, is_saved: bool = False) -> InlineKeyboardMarkup:
-    """Kino ko'rganda action tugmalari"""
+def movie_action_kb(movie_code: str, is_saved: bool = False, likes: int = 0, is_liked: bool = False) -> InlineKeyboardMarkup:
+    """Kino ko'rganda action tugmalari (like + saqlash)"""
     builder = InlineKeyboardBuilder()
+
+    like_text = f"👍 {likes} ✓" if is_liked else f"👍 {likes}"
+    builder.row(InlineKeyboardButton(text=like_text, callback_data=f"like:{movie_code}"))
 
     if is_saved:
         builder.row(InlineKeyboardButton(text="💔 Saqlanganlardan o'chirish", callback_data=f"unsave:{movie_code}"))
@@ -427,6 +433,40 @@ def saved_movies_kb(movies: list, page: int = 1, total_pages: int = 1) -> Inline
 
     builder.row(InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="back_to_menu"))
 
+    return builder.as_markup()
+
+
+def profile_kb() -> InlineKeyboardMarkup:
+    """Profil menyusi — ko'rish tarixi, saqlanganlar."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="📜 Ko'rilgan kinolar", callback_data="watch_history"))
+    builder.row(InlineKeyboardButton(text="❤️ Saqlanganlar", callback_data="saved_movies"))
+    builder.row(InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="back_to_menu"))
+    return builder.as_markup()
+
+
+def history_movies_kb(movies: list, page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
+    """Ko'rilgan kinolar ro'yxati (bosilса kino qayta yuboriladi)."""
+    builder = InlineKeyboardBuilder()
+
+    for movie in movies:
+        premium = "💎 " if movie.is_premium else ""
+        builder.row(InlineKeyboardButton(
+            text=f"{premium}🎬 {movie.display_title}",
+            callback_data=f"movie_view:{movie.code}"
+        ))
+
+    if total_pages > 1:
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(InlineKeyboardButton(text="◀️ Oldingi", callback_data=f"hist_page:{page - 1}"))
+        nav_buttons.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav_buttons.append(InlineKeyboardButton(text="Keyingi ▶️", callback_data=f"hist_page:{page + 1}"))
+        builder.row(*nav_buttons)
+
+    builder.row(InlineKeyboardButton(text="👤 Profil", callback_data="profile"))
+    builder.row(InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="back_to_menu"))
     return builder.as_markup()
 
 
@@ -545,7 +585,10 @@ def admin_main_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="💎 Tariflar", callback_data="admin:tariffs"),
         InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="admin:settings")
     )
-    builder.row(InlineKeyboardButton(text="📨 Xabar yuborish", callback_data="admin:broadcast"))
+    builder.row(
+        InlineKeyboardButton(text="📨 Xabar yuborish", callback_data="admin:broadcast"),
+        InlineKeyboardButton(text="🙋 So'rovlar", callback_data="admin:requests")
+    )
     builder.row(InlineKeyboardButton(text="✏️ Xabarlar", callback_data="admin:messages"))
     builder.row(InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_menu"))
     return builder.as_markup()

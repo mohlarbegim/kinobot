@@ -84,6 +84,7 @@ class Movie(models.Model):
 
     # Statistika
     views = models.PositiveIntegerField(default=0, verbose_name="Ko'rishlar soni")
+    likes = models.PositiveIntegerField(default=0, verbose_name="Yoqtirishlar soni")
 
     # Holat
     is_active = models.BooleanField(default=True, verbose_name='Aktiv')
@@ -116,6 +117,87 @@ class Movie(models.Model):
         """Ko'rishlar sonini oshirish"""
         self.views += 1
         self.save(update_fields=['views'])
+
+
+class MovieLike(models.Model):
+    """Kino yoqtirishlari (like) — har user bir kinoni bir marta yoqtiradi (toggle)."""
+
+    user = models.ForeignKey(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='movie_likes',
+        verbose_name='Foydalanuvchi'
+    )
+    movie = models.ForeignKey(
+        Movie,
+        on_delete=models.CASCADE,
+        related_name='liked_by',
+        verbose_name='Kino'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Yoqtirilgan vaqt')
+
+    class Meta:
+        verbose_name = 'Yoqtirish'
+        verbose_name_plural = 'Yoqtirishlar'
+        unique_together = ['user', 'movie']
+
+    def __str__(self):
+        return f"{self.user_id} ❤️ {self.movie_id}"
+
+
+class WatchHistory(models.Model):
+    """Ko'rish tarixi — foydalanuvchi ko'rgan kinolar (qayta ko'rilса vaqt yangilanadi)."""
+
+    user = models.ForeignKey(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='watch_history',
+        verbose_name='Foydalanuvchi'
+    )
+    movie = models.ForeignKey(
+        Movie,
+        on_delete=models.CASCADE,
+        related_name='watched_by',
+        verbose_name='Kino'
+    )
+    watched_at = models.DateTimeField(auto_now=True, verbose_name="Ko'rilgan vaqt")
+
+    class Meta:
+        verbose_name = 'Ko\'rish tarixi'
+        verbose_name_plural = 'Ko\'rish tarixi'
+        unique_together = ['user', 'movie']
+        ordering = ['-watched_at']
+
+    def __str__(self):
+        return f"{self.user_id} 👁 {self.movie_id}"
+
+
+class MovieRequest(models.Model):
+    """Kino so'rovi — foydalanuvchi botда yo'q kinoni nomini so'raydi."""
+
+    STATUS_CHOICES = [
+        ('pending', 'Kutilmoqda'),
+        ('done', 'Qo\'shildi'),
+        ('rejected', 'Rad etildi'),
+    ]
+
+    user = models.ForeignKey(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='movie_requests',
+        verbose_name='Foydalanuvchi'
+    )
+    title = models.CharField(max_length=255, verbose_name="So'ralgan kino")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='Holat')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="So'ralgan vaqt")
+
+    class Meta:
+        verbose_name = 'Kino so\'rovi'
+        verbose_name_plural = 'Kino so\'rovlari'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.title} ({self.get_status_display()})"
 
 
 class SavedMovie(models.Model):
