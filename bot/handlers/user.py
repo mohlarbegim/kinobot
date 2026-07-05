@@ -20,7 +20,7 @@ from bot.keyboards import (
     search_filter_kb, filter_country_kb, filter_language_kb, filter_year_kb,
     flash_sale_tariffs_kb, filter_movies_kb
 )
-from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, remove_channel_membership, get_message_text, esc
+from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, remove_channel_membership, get_message_text, compute_missing_channels, esc
 from apps.payments.models import PendingPaymentSession
 from datetime import timedelta
 from django.utils import timezone as dj_timezone
@@ -1079,7 +1079,6 @@ async def premium_callback(callback: CallbackQuery, db_user: User = None):
     # Sozlamalardan chegirma muddatini olish
     settings = await get_bot_settings()
     discount_duration = settings.discount_duration  # sekundda
-    discount_percent = settings.discount_percent
 
     # Flash sale - chegirma vaqti ichida
     is_flash_sale = settings.discount_active
@@ -1107,7 +1106,7 @@ async def premium_callback(callback: CallbackQuery, db_user: User = None):
             "✅ Barcha kinolarga kirish\n"
             "✅ Reklamasiz foydalanish\n"
             "✅ Tezkor yuklash\n\n"
-            f"⚡ <b>{duration_mins} daqiqa ichida {discount_percent}% chegirmali narxda oling!</b>\n\n"
+            f"⚡ <b>Shoshiling! Taklif atigi {duration_mins} daqiqa amal qiladi.</b>\n\n"
             "📦 Tarifni tanlang:"
         )
         await callback.message.edit_text(text, reply_markup=flash_sale_tariffs_kb(tariffs, is_discount=True))
@@ -1145,7 +1144,6 @@ async def premium_handler(message: Message, db_user: User = None):
     # Sozlamalardan chegirma muddatini olish
     settings = await get_bot_settings()
     discount_duration = settings.discount_duration
-    discount_percent = settings.discount_percent
 
     # Flash sale
     is_flash_sale = settings.discount_active
@@ -1170,7 +1168,7 @@ async def premium_handler(message: Message, db_user: User = None):
             "✅ Barcha kinolarga kirish\n"
             "✅ Reklamasiz foydalanish\n"
             "✅ Tezkor yuklash\n\n"
-            f"⚡ <b>{duration_mins} daqiqa ichida {discount_percent}% chegirmali narxda oling!</b>\n\n"
+            f"⚡ <b>Shoshiling! Taklif atigi {duration_mins} daqiqa amal qiladi.</b>\n\n"
             "📦 Tarifni tanlang:",
             reply_markup=flash_sale_tariffs_kb(tariffs, is_discount=True)
         )
@@ -1197,17 +1195,11 @@ async def flash_tariff_callback(callback: CallbackQuery, db_user: User = None):
         await callback.answer("❌ Tarif topilmadi!", show_alert=True)
         return
 
-    # Narxni hisoblash - narx HECH QACHON oshmaydi (2x olib tashlandi)
-    if is_discount and db_user and db_user.is_flash_sale_active:
-        # Flash sale aktiv - "chegirmali" deb ko'rsatamiz (urgency)
-        price = tariff.price
-        price_text = f"{price:,} so'm (chegirmali!)"
-        with_discount = True
-    else:
-        # Flash sale tugadi/o'chiq - o'sha qo'yilgan narx (oshmaydi)
-        price = tariff.price
-        price_text = f"{price:,} so'm"
-        with_discount = False
+    # Narx doim qo'yilgan narx (chegirma yo'q, 2x yo'q). Flash sale faqat taymer/urgency;
+    # haqiqiy chegirma qo'llanmagani uchun "chegirmali" demaymiz va is_discounted=False.
+    price = tariff.price
+    price_text = f"{price:,} so'm"
+    with_discount = False
 
     # Karta ma'lumotlarini olish
     from apps.core.models import BotSettings
@@ -1267,13 +1259,8 @@ def _save_pending_payment_for_flash(user_id: int, tariff_id: int, amount: int, w
 
 # ==================== PROFIL ====================
 
-@router.callback_query(F.data == "profile")
-async def profile_callback(callback: CallbackQuery, db_user: User = None):
-    """Profil"""
-    if not db_user:
-        await callback.answer("❌ Xatolik.", show_alert=True)
-        return
-
+async def _build_profile_text(db_user: User, bot: Bot) -> str:
+    """Profil xabari matnini yig'ish (profile_callback va profile_handler uchun yagona manba)."""
     if db_user.is_premium_active:
         status = f"💎 Premium ({db_user.days_left} kun)"
     elif db_user.is_trial_active:
@@ -1282,21 +1269,31 @@ async def profile_callback(callback: CallbackQuery, db_user: User = None):
         status = "👤 Oddiy"
 
     referrals_count = await get_referrals_count(db_user.user_id)
-    bot_username = (await callback.bot.me()).username
+    bot_username = await get_bot_username(bot)  # keshli - har profilда bot.me() urmaydi
+
+    return await get_message_text(
+        'profile_info',
+        user_id=db_user.user_id,
+        full_name=esc(db_user.full_name),
+        status=status,
+        premium_status=status,
+        movies_watched=format_number(db_user.movies_watched),
+        referral_code=db_user.referral_code,
+        referrals_count=referrals_count,
+        bot_username=bot_username,
+        joined_date=format_date(db_user.created_at),
+    )
+
+
+@router.callback_query(F.data == "profile")
+async def profile_callback(callback: CallbackQuery, db_user: User = None):
+    """Profil"""
+    if not db_user:
+        await callback.answer("❌ Xatolik.", show_alert=True)
+        return
 
     await callback.message.edit_text(
-        await get_message_text(
-            'profile_info',
-            user_id=db_user.user_id,
-            full_name=esc(db_user.full_name),
-            status=status,
-            premium_status=status,
-            movies_watched=format_number(db_user.movies_watched),
-            referral_code=db_user.referral_code,
-            referrals_count=referrals_count,
-            bot_username=bot_username,
-            joined_date=format_date(db_user.created_at),
-        ),
+        await _build_profile_text(db_user, callback.bot),
         reply_markup=back_kb()
     )
     await callback.answer()
@@ -1309,29 +1306,8 @@ async def profile_handler(message: Message, db_user: User = None):
         await message.answer("❌ Xatolik.")
         return
 
-    if db_user.is_premium_active:
-        status = f"💎 Premium ({db_user.days_left} kun)"
-    elif db_user.is_trial_active:
-        status = f"🎁 Trial ({db_user.days_left} kun)"
-    else:
-        status = "👤 Oddiy"
-
-    referrals_count = await get_referrals_count(db_user.user_id)
-    bot_username = (await message.bot.me()).username
-
     await message.answer(
-        await get_message_text(
-            'profile_info',
-            user_id=db_user.user_id,
-            full_name=esc(db_user.full_name),
-            status=status,
-            premium_status=status,
-            movies_watched=format_number(db_user.movies_watched),
-            referral_code=db_user.referral_code,
-            referrals_count=referrals_count,
-            bot_username=bot_username,
-            joined_date=format_date(db_user.created_at),
-        ),
+        await _build_profile_text(db_user, message.bot),
         reply_markup=back_kb()
     )
 
@@ -1569,44 +1545,11 @@ async def check_subscription(bot: Bot, user_id: int) -> list:
       obuna bo'lgan hisoblanadi (so'rovning o'zi kifoya).
     - Instagram / bot / tashqi (non-checkable): MAJBURIY, lekin bot tekshira olmaydi ->
       foydalanuvchi "obuna bo'ldim" -> Instagram'ga qayta o'tib tasdiqlaydi (ikki tashrif).
+
+    Mantiq bot.utils.compute_missing_channels'да (middleware bilan bir xil).
     """
     channels = await get_active_channels()
-    checkable_missing = []
-    noncheckable_missing = []
-    confirmed_ids = None     # lazy - Instagram tasdiqlari
-    requested_ids = None     # lazy - yopiq kanal join request'lari
-
-    for channel in channels:
-        if channel.is_checkable:
-            # FAQAT get_chat_member (Telegram) xatosi fail-open. DB lookup (join request)
-            # try'dan TASHQARIDA - DB uzilishida hamma gate'dan o'tib ketmasligi uchun.
-            try:
-                member = await bot.get_chat_member(channel.channel_id, user_id)
-                status = member.status
-            except TelegramBadRequest as e:
-                # Bot kanalni tekshira olmadi (admin emas / kanal topilmadi) -> foydalanuvchini
-                # BLOKLAMAYMIZ (fail-open), aks holda bitta noto'g'ri kanal hammani qulflaydi.
-                logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
-                continue
-            except Exception as e:
-                logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
-                continue
-
-            if status in ['left', 'kicked']:
-                # A'zo emas - lekin yopiq kanalga qo'shilish so'rovi yuborgan bo'lishi mumkin
-                if requested_ids is None:
-                    requested_ids = await get_join_requested_ids(user_id)
-                if channel.id not in requested_ids:
-                    checkable_missing.append(channel)
-        else:
-            # Instagram / bot / tashqi - tasdiq (ikki tashrif) orqali
-            if confirmed_ids is None:
-                confirmed_ids = await get_confirmed_channel_ids(user_id)
-            if channel.id not in confirmed_ids:
-                noncheckable_missing.append(channel)
-
-    # Barcha bajarilmagan kanallar birga (Telegram + Instagram) - bitta ekranda
-    return checkable_missing + noncheckable_missing
+    return await compute_missing_channels(bot, user_id, channels)
 
 
 @sync_to_async

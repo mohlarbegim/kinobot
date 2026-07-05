@@ -1,13 +1,9 @@
-import logging
 from typing import Callable, Dict, Any, Awaitable
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import TelegramObject, Message, CallbackQuery
-from aiogram.exceptions import TelegramBadRequest
 from asgiref.sync import sync_to_async
 from cachetools import TTLCache
 from django.conf import settings
-
-logger = logging.getLogger(__name__)
 
 # Cache for channels and user subscriptions
 _channels_cache = TTLCache(maxsize=1, ttl=300)
@@ -83,54 +79,14 @@ class SubscriptionMiddleware(BaseMiddleware):
 
     async def _check_subscription(self, bot: Bot, user_id: int) -> list:
         """
-        Obunani tekshirish. Handlerdagi check_subscription bilan bir xil.
-
-        - Telegram (checkable): MAJBURIY. get_chat_member; yopiq kanalga qo'shilish
-          so'rovi (chat_join_request) yuborgan bo'lsa ham o'tadi.
-        - Instagram / bot / tashqi (non-checkable): MAJBURIY, "obuna bo'ldim" tasdig'i
-          (ikki tashrif) orqali.
-
-        Bajarilmagan barcha kanallar birga qaytadi (Telegram + Instagram).
+        Obunani tekshirish. Handlerdagi check_subscription bilan BIR XIL - mantiq
+        bot.utils.compute_missing_channels'да (yagona manba). Bu yerda faqat kanallar
+        keshlangan ro'yxatdan olinadi (_get_channels_cached).
         """
-        from bot.utils import get_confirmed_channel_ids, get_join_requested_ids
+        from bot.utils import compute_missing_channels
 
         channels = await self._get_channels_cached()
-        checkable_missing = []
-        noncheckable_missing = []
-        confirmed_ids = None  # lazy - Instagram tasdiqlari
-        requested_ids = None  # lazy - yopiq kanal join request'lari
-
-        for channel in channels:
-            if channel.is_checkable:
-                # FAQAT get_chat_member (Telegram) xatosi fail-open bo'ladi. DB lookup
-                # (get_join_requested_ids) try'dan TASHQARIDA - DB xatosi fail-open
-                # qilmasligi kerak (aks holda DB uzilishida hamma gate'dan o'tib ketardi;
-                # non-checkable shoxidagi get_confirmed_channel_ids ham propagate qiladi).
-                try:
-                    member = await bot.get_chat_member(channel.channel_id, user_id)
-                    status = member.status
-                except TelegramBadRequest as e:
-                    # Bot kanalni tekshira olmadi (admin emas / topilmadi) -> fail-open.
-                    logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
-                    continue
-                except Exception as e:
-                    # TelegramForbiddenError ("bot is not a member...") va boshqalar ham fail-open.
-                    logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
-                    continue
-
-                if status in ['left', 'kicked']:
-                    if requested_ids is None:
-                        requested_ids = await get_join_requested_ids(user_id)
-                    if channel.id not in requested_ids:
-                        checkable_missing.append(channel)
-            else:
-                # Instagram / bot / tashqi - tasdiq (ikki tashrif) orqali
-                if confirmed_ids is None:
-                    confirmed_ids = await get_confirmed_channel_ids(user_id)
-                if channel.id not in confirmed_ids:
-                    noncheckable_missing.append(channel)
-
-        return checkable_missing + noncheckable_missing
+        return await compute_missing_channels(bot, user_id, channels)
 
     async def _get_channels_cached(self):
         """Get channels with cache"""

@@ -26,6 +26,12 @@ TOP_MOVIES_LIMIT = 10
 # Payment
 PENDING_PAYMENT_TIMEOUT = 1800  # 30 daqiqa (sekundlarda)
 
+# Yopiq kanalga qo'shilish so'rovi necha kun "obuna" deb hisoblanadi.
+# So'rov bekor qilingan/rad etilgan bo'lsa Telegram signal bermaydi, shuning uchun
+# yozuv abadiy qolib cheksiz kirish bermasligi uchun vaqt oynasi qo'yamiz. Undan keyin
+# get_chat_member qayta tekshiradi (tasdiqlangan bo'lsa a'zo bo'ladi, aks holda qayta so'raladi).
+JOIN_REQUEST_TTL_DAYS = 7
+
 # Validation
 MAX_MOVIE_CODE_LENGTH = 10
 

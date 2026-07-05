@@ -282,6 +282,30 @@ class TestChannelJoinRequest:
         ChannelJoinRequest.objects.filter(user=user).delete()
         ch.delete(); user.delete()
 
+    def test_old_join_request_not_counted(self, user_model, channel_model):
+        """JOIN_REQUEST_TTL_DAYS'dan eski so'rov hisobga olinmaydi (bekor/rad bypass oldini olish)"""
+        from datetime import timedelta
+        from django.utils import timezone
+        from apps.channels.models import ChannelJoinRequest
+        from bot.utils.helpers import get_join_requested_ids
+        from bot.constants import JOIN_REQUEST_TTL_DAYS
+
+        user = user_model.objects.create(user_id=777000333, username='old', full_name='Old')
+        ch = channel_model.objects.create(
+            channel_id=-1009998886, title='Yopiq', channel_type='telegram_channel',
+            invite_link='https://t.me/+old', is_active=True,
+        )
+        jr = ChannelJoinRequest.objects.create(channel=ch, user=user)
+        old_time = timezone.now() - timedelta(days=JOIN_REQUEST_TTL_DAYS + 1)
+        ChannelJoinRequest.objects.filter(pk=jr.pk).update(created_at=old_time)
+
+        # .func - @sync_to_async ostidagi asl sync funksiya
+        requested = get_join_requested_ids.func(777000333)
+        assert ch.id not in requested
+
+        ChannelJoinRequest.objects.filter(user=user).delete()
+        ch.delete(); user.delete()
+
 
 class TestLeaveReasksSubscription:
     """Kanaldan chiqib ketsa yozuvlar o'chadi -> keyingi tekshiruvda qayta obuna so'raladi"""

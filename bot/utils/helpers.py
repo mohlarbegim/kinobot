@@ -207,13 +207,69 @@ def record_join_request(user_id: int, channel_pk: int):
 
 @sync_to_async
 def get_join_requested_ids(user_id: int) -> set:
-    """Foydalanuvchi qo'shilish so'rovi yuborgan kanallar (Channel PK) to'plami."""
+    """Foydalanuvchi qo'shilish so'rovi yuborgan kanallar (Channel PK) to'plami.
+
+    Faqat oxirgi JOIN_REQUEST_TTL_DAYS ichidagi so'rovlar hisobga olinadi: bekor
+    qilingan/rad etilgan so'rov Telegram signal bermaydi, shuning uchun eski yozuv
+    cheksiz kirish bermasligi uchun vaqt oynasidan keyin get_chat_member qayta tekshiradi.
+    """
+    from datetime import timedelta
+    from django.utils import timezone
     from apps.channels.models import ChannelJoinRequest
+    from bot.constants import JOIN_REQUEST_TTL_DAYS
+
+    cutoff = timezone.now() - timedelta(days=JOIN_REQUEST_TTL_DAYS)
     return set(
         ChannelJoinRequest.objects
-        .filter(user__user_id=user_id)
+        .filter(user__user_id=user_id, created_at__gte=cutoff)
         .values_list('channel_id', flat=True)
     )
+
+
+async def compute_missing_channels(bot, user_id: int, channels: list) -> list:
+    """Bajarilmagan majburiy kanallar ro'yxati (Telegram avval, Instagram oxirida).
+
+    Handler'dagi check_subscription va SubscriptionMiddleware._check_subscription
+    IKKALASI shu funksiyani chaqiradi - mantiq bitta joyda (ilgari ikki nusxa bo'lib,
+    har o'zgarish ikki faylда qo'lда sinxronlanardi). `channels` chaqiruvchi tomonidan
+    beriladi (handler get_active_channels; middleware keshlangan ro'yxat).
+
+    - Telegram (is_checkable): get_chat_member; 'left'/'kicked' bo'lsa yopiq kanal
+      qo'shilish so'rovi bor-yo'qligi tekshiriladi. get_chat_member xatosi -> fail-open
+      (kanal o'tkaziladi). DB lookup try'dan tashqarida - DB xatosi fail-open QILMAYDI.
+    - Instagram/tashqi (non-checkable): "obuna bo'ldim" tasdig'i (ChannelSubscription).
+    """
+    from aiogram.exceptions import TelegramBadRequest
+
+    checkable_missing = []
+    noncheckable_missing = []
+    confirmed_ids = None   # lazy - Instagram tasdiqlari
+    requested_ids = None   # lazy - yopiq kanal join request'lari
+
+    for channel in channels:
+        if channel.is_checkable:
+            try:
+                member = await bot.get_chat_member(channel.channel_id, user_id)
+                status = member.status
+            except TelegramBadRequest as e:
+                logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
+                continue
+            except Exception as e:
+                logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
+                continue
+
+            if status in ['left', 'kicked']:
+                if requested_ids is None:
+                    requested_ids = await get_join_requested_ids(user_id)
+                if channel.id not in requested_ids:
+                    checkable_missing.append(channel)
+        else:
+            if confirmed_ids is None:
+                confirmed_ids = await get_confirmed_channel_ids(user_id)
+            if channel.id not in confirmed_ids:
+                noncheckable_missing.append(channel)
+
+    return checkable_missing + noncheckable_missing
 
 
 @sync_to_async
