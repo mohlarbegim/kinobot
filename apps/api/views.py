@@ -296,6 +296,75 @@ class ChannelViewSet(viewsets.ModelViewSet):
         obj.save(update_fields=['is_active'])  # save() -> post_save signal -> 'channels'
         return Response(self.get_serializer(obj).data)
 
+    @action(detail=True, methods=['get'], url_path='check-bot')
+    def check_bot(self, request, pk=None):
+        """
+        Bot shu kanalni obunani tekshira oladimi? (Telegram kanal/guruh uchun bot
+        ADMIN bo'lishi shart, aks holda get_chat_member ishlamaydi -> obuna
+        majburlanmaydi). Instagram/tashqi turlar tasdiq orqali ishlaydi.
+        """
+        import requests
+        from django.conf import settings
+
+        channel = self.get_object()
+
+        if channel.channel_type not in ('telegram_channel', 'telegram_group'):
+            return Response({
+                'checkable': False,
+                'can_check': False,
+                'message': "Instagram/tashqi kanal — tasdiq (honor-system) orqali ishlaydi, "
+                           "bot admin bo'lishi shart emas.",
+            })
+        if not channel.channel_id:
+            return Response({
+                'checkable': False,
+                'can_check': False,
+                'message': "⚠️ Kanal ID (raqamli, -100... bilan boshlanadi) kiritilmagan — "
+                           "obunani tekshirib bo'lmaydi. Kanal ID ni to'ldiring.",
+            })
+
+        token = settings.BOT_TOKEN
+        if not token:
+            return Response({'detail': "BOT_TOKEN sozlanmagan (web xizmatida)."},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        try:
+            bot_id = int(token.split(':')[0])
+            resp = requests.get(
+                f'https://api.telegram.org/bot{token}/getChatMember',
+                params={'chat_id': channel.channel_id, 'user_id': bot_id},
+                timeout=10,
+            )
+            data = resp.json()
+        except Exception as e:
+            return Response({'ok': False, 'can_check': False, 'message': f"So'rov xatosi: {e}"},
+                            status=status.HTTP_502_BAD_GATEWAY)
+
+        if not data.get('ok'):
+            desc = data.get('description', "noma'lum xato")
+            return Response({
+                'ok': False,
+                'is_admin': False,
+                'can_check': False,
+                'message': f"❌ Bot bu kanalni tekshira olmaydi: {desc}. "
+                           f"Botni (@bot) kanalga ADMIN qiling.",
+            })
+
+        st = (data.get('result') or {}).get('status')
+        is_admin = st in ('administrator', 'creator')
+        return Response({
+            'ok': True,
+            'status': st,
+            'is_admin': is_admin,
+            'can_check': is_admin,
+            'message': (
+                "✅ Bot admin — obunani to'g'ri tekshiradi."
+                if is_admin else
+                f"⚠️ Bot admin emas (status: {st}). Obunani tekshirish uchun botni "
+                f"kanalga ADMIN qiling, aks holda obuna majburlanmaydi."
+            ),
+        })
+
 
 # ---------------------------------------------------------------------------
 # Tariffs

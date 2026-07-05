@@ -1,13 +1,27 @@
-import { Tag, Button, App } from 'antd'
-import { CheckCircleOutlined, StopOutlined } from '@ant-design/icons'
+import { Tag, Button, App, Tooltip } from 'antd'
+import { CheckCircleOutlined, StopOutlined, RobotOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import CrudPage, { type FormField } from '../components/CrudPage'
 import { useAction } from '../api/hooks'
+import { api } from '../api/client'
 import { CHANNEL_TYPE_OPTIONS } from '../constants'
 
 export default function Channels() {
   const { message } = App.useApp()
   const act = useAction('channels')
+
+  const checkBot = async (id: number) => {
+    const hide = message.loading('Bot holati tekshirilmoqda...', 0)
+    try {
+      const { data } = await api.get(`/channels/${id}/check-bot/`)
+      hide()
+      if (data.can_check) message.success(data.message, 6)
+      else message.warning(data.message, 8)
+    } catch (e: any) {
+      hide()
+      message.error(e?.response?.data?.detail || e?.response?.data?.message || 'Tekshirishda xato')
+    }
+  }
 
   const columns: ColumnsType<any> = [
     { title: 'Nomi', dataIndex: 'title' },
@@ -42,9 +56,14 @@ export default function Channels() {
       resource="channels"
       columns={columns}
       fields={fields}
-      rowActions={(r) => (
-        <Button key="t" size="small" icon={r.is_active ? <StopOutlined /> : <CheckCircleOutlined />} onClick={() => toggle(r.id)} />
-      )}
+      rowActions={(r) => [
+        <Tooltip key="b" title="Bot bu kanalni tekshira oladimi?">
+          <Button size="small" icon={<RobotOutlined />} onClick={() => checkBot(r.id)} />
+        </Tooltip>,
+        <Tooltip key="t" title={r.is_active ? 'Nofaol qilish' : 'Aktivlashtirish'}>
+          <Button size="small" icon={r.is_active ? <StopOutlined /> : <CheckCircleOutlined />} onClick={() => toggle(r.id)} />
+        </Tooltip>,
+      ]}
     />
   )
 }
