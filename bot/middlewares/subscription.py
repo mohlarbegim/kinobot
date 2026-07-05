@@ -108,6 +108,11 @@ class SubscriptionMiddleware(BaseMiddleware):
                     # Bot kanalni tekshira olmadi (admin emas / topilmadi) -> fail-open (o'tkazamiz),
                     # lekin admin sozlamani tuzatishi uchun warning log yozamiz.
                     logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
+                except Exception as e:
+                    # TelegramForbiddenError ("bot is not a member of the channel chat") va boshqa
+                    # kutilmagan xatolar ham fail-open bo'lishi kerak, aks holda har bir foydalanuvchi
+                    # update'i global error handler'ga chiqib ketadi (handler check_subscription bilan bir xil).
+                    logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
             else:
                 # Instagram / bot / tashqi - tasdiq (honor-system) orqali
                 if confirmed_ids is None:

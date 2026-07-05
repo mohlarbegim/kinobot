@@ -285,6 +285,32 @@ class TestSubscriptionMiddlewareSkip:
             assert skipped is True, data
 
 
+class TestMiddlewareFailOpen:
+    """Bot kanalga admin emas (get_chat_member xato) -> middleware crash bo'lmasligi kerak"""
+
+    @pytest.mark.asyncio
+    async def test_check_subscription_fail_open_on_forbidden(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from bot.middlewares.subscription import SubscriptionMiddleware
+
+        mw = SubscriptionMiddleware()
+        # Checkable (Telegram) kanal; get_chat_member faqat shu uchun chaqiriladi (DB tegilmaydi)
+        ch = SimpleNamespace(id=1, channel_id=-1004387912093, is_checkable=True,
+                             title='X', invite_link='https://t.me/x')
+        mw._get_channels_cached = AsyncMock(return_value=[ch])
+
+        bot = AsyncMock()
+        # "Forbidden: bot is not a member of the channel chat" kabi xato
+        bot.get_chat_member = AsyncMock(
+            side_effect=Exception("Forbidden: bot is not a member of the channel chat")
+        )
+
+        # Crash bo'lmasligi + fail-open (kanal o'tkaziladi) -> bo'sh ro'yxat
+        result = await mw._check_subscription(bot, 123456789)
+        assert result == []
+
+
 class TestReferralSystem:
     """Test referral system"""
 
