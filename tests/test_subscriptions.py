@@ -284,9 +284,10 @@ class TestChannelJoinRequest:
 
 
 class TestChannelsKeyboard:
-    """channels_kb - non-checkable kanallar uchun tasdiq tugmasi + double-confirm"""
+    """channels_kb - faqat havola tugmalari + «Tekshirish» (tasdiq tugmasi YO'Q)"""
 
-    def test_confirm_button_only_for_non_checkable(self):
+    def test_no_confirm_button(self):
+        """Instagram uchun ham alohida 'obuna bo'ldim' tugmasi bo'lmasligi kerak"""
         from types import SimpleNamespace
         from bot.keyboards import channels_kb
 
@@ -296,9 +297,12 @@ class TestChannelsKeyboard:
         kb = channels_kb([tg, ig])
         callbacks = [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data]
 
-        assert 'confirm_ch:2' in callbacks           # Instagram uchun tasdiq tugmasi
-        assert 'confirm_ch:1' not in callbacks        # Telegram uchun bo'lmasligi kerak
-        assert 'check_subscription' in callbacks      # Tekshirish tugmasi bor
+        # Endi tasdiq tugmalari umuman yo'q - faqat «Tekshirish»
+        assert not any(c.startswith('confirm_ch') for c in callbacks)
+        assert 'check_subscription' in callbacks
+        # Har kanal uchun bitta havola (url) tugmasi
+        url_buttons = [b for row in kb.inline_keyboard for b in row if b.url]
+        assert len(url_buttons) == 2
 
     def test_channels_are_numbered(self):
         """Havola tugmalari tartib raqami bilan; Instagram (oxirgi) eng katta raqamda"""
@@ -318,20 +322,6 @@ class TestChannelsKeyboard:
         assert url_texts[2].startswith('3. ')          # Instagram oxirgi raqam
         assert 'IG' in url_texts[2]
 
-    def test_confirming_id_shows_yes_button(self):
-        """confirming_id berilganda o'sha kanal 'Ha, tasdiqlayman' (confirm_ch_yes) bo'ladi"""
-        from types import SimpleNamespace
-        from bot.keyboards import channels_kb
-
-        ig = SimpleNamespace(id=2, title='IG', invite_link='https://instagram.com/x',
-                             is_checkable=False, channel_type='instagram')
-        kb = channels_kb([ig], confirming_id=2)
-        callbacks = [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data]
-
-        assert 'confirm_ch_yes:2' in callbacks       # ikkinchi tasdiq tugmasi
-        assert 'confirm_ch:2' not in callbacks        # birinchi bosish tugmasi endi yo'q
-
-
 class TestSubscriptionPromptText:
     """subscription_prompt_text - barcha kanallar birga (Telegram + Instagram)"""
 
@@ -348,28 +338,18 @@ class TestSubscriptionPromptText:
 
     def test_mixed_text_mentions_instagram(self):
         from bot.keyboards import subscription_prompt_text
-        # Aralash (Telegram + Instagram) -> Instagram tasdig'i haqida izoh bor
+        # Aralash (Telegram + Instagram) -> Instagram haqida izoh bor
         text = subscription_prompt_text([self._ns(True), self._ns(False)])
         assert 'Instagram' in text
-        assert 'obuna bo\'ldim' in text.lower() or 'obuna bo‘ldim' in text.lower()
+        assert 'Tekshirish' in text
 
     def test_confirming_text(self):
         from bot.keyboards import subscription_prompt_text
-        # Ikkinchi tashrif tasdig'i: Instagram havolasiga qayta o'tishni so'raydi
+        # Ikkinchi tashrif tasdig'i: Instagram havolasiga qayta o'tib «Tekshirish»ni so'raydi
         text = subscription_prompt_text([self._ns(False)], confirming=True)
         assert 'Instagram' in text
         assert 'havola' in text.lower()
-        assert 'obuna bo\'ldim' in text.lower() or 'obuna bo‘ldim' in text.lower()
-
-
-class TestSubscriptionMiddlewareSkip:
-    """confirm_ch* callback middleware'da bloklanmasligi kerak"""
-
-    def test_confirm_callback_prefix_skipped(self):
-        # Middleware skip: confirm_ch prefiksi ikkala callback'ni ham qamrab oladi
-        for data in ('confirm_ch:5', 'confirm_ch_yes:5'):
-            skipped = data.startswith('confirm_ch') or data.startswith('admin:')
-            assert skipped is True, data
+        assert 'Tekshirish' in text
 
 
 class TestMiddlewareFailOpen:
@@ -477,6 +457,65 @@ class TestMiddlewareJoinRequest:
         assert result[0].id == ch.id
 
         await teardown(user, ch)
+
+
+class TestInstagramDoubleCheck:
+    """check_sub_callback: Instagram uchun 'ikki marta Tekshirish' mantig'i"""
+
+    @pytest.mark.asyncio
+    async def test_instagram_requires_two_checks(self, user_model, channel_model):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from asgiref.sync import sync_to_async
+        from apps.channels.models import ChannelSubscription
+        from bot.handlers import user as user_handlers
+
+        uid = 909090901
+
+        @sync_to_async
+        def setup():
+            u = user_model.objects.create(user_id=uid, username='ig', full_name='IG')
+            ch = channel_model.objects.create(
+                title='IG', channel_type='instagram',
+                invite_link='https://instagram.com/x', is_active=True,
+            )
+            return u, ch
+
+        @sync_to_async
+        def ig_confirmed():
+            return ChannelSubscription.objects.filter(
+                user__user_id=uid, channel__channel_type='instagram'
+            ).exists()
+
+        @sync_to_async
+        def teardown(u, ch):
+            ChannelSubscription.objects.filter(user=u).delete()
+            ch.delete(); u.delete()
+
+        u, ch = await setup()
+        # In-memory holatni tozalaymiz (boshqa testlardan qolmasin)
+        user_handlers._instagram_recheck.pop(uid, None)
+        user_handlers._pending_subscriptions.pop(uid, None)
+
+        bot = AsyncMock()  # checkable kanal yo'q -> get_chat_member chaqirilmaydi
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=uid),
+            message=AsyncMock(),
+            answer=AsyncMock(),
+        )
+
+        # 1-Tekshirish: HALI tasdiqlanmaydi, Instagram qayta ko'rsatiladi
+        await user_handlers.check_sub_callback(callback, bot)
+        assert user_handlers._instagram_recheck.get(uid) is True
+        assert await ig_confirmed() is False
+        assert callback.message.edit_text.await_count >= 1
+
+        # 2-Tekshirish: endi tasdiqlanadi
+        await user_handlers.check_sub_callback(callback, bot)
+        assert await ig_confirmed() is True
+        assert uid not in user_handlers._instagram_recheck
+
+        await teardown(u, ch)
 
 
 class TestReferralSystem:

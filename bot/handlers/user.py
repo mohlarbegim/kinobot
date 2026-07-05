@@ -61,6 +61,12 @@ _bot_info_cache = TTLCache(maxsize=1, ttl=CACHE_TTL_BOT_INFO)
 # TTLCache ishlatamiz - avtomatik tozalanadi (memory leak oldini olish)
 _pending_subscriptions: TTLCache = TTLCache(maxsize=CACHE_MAX_PENDING_SUBS, ttl=CACHE_TTL_SUBSCRIPTION)
 
+# Instagram/tashqi "ikki marta Tekshirish" bosqichi (user_id -> True).
+# Telegram kanallari bajarilib, faqat Instagram qolganda BIRINCHI «Tekshirish»da
+# Instagram qayta ko'rsatiladi (ikkinchi tashrifga majburlash), IKKINCHI «Tekshirish»da
+# tasdiqlanadi. Barcha callback'lar bitta bot process'ida ishlangani uchun in-memory yetarli.
+_instagram_recheck: TTLCache = TTLCache(maxsize=CACHE_MAX_PENDING_SUBS, ttl=CACHE_TTL_SUBSCRIPTION)
+
 
 async def get_bot_link(bot: Bot) -> str:
     """Bot linkini olish (cached)"""
@@ -245,7 +251,14 @@ async def on_chat_join_request(request: ChatJoinRequest):
 
 @router.callback_query(F.data == "check_subscription")
 async def check_sub_callback(callback: CallbackQuery, bot: Bot):
-    """Obunani tekshirish (barcha kanallar birga: Telegram + Instagram)."""
+    """
+    Obunani tekshirish. Instagram/tashqi kanallar uchun "ikki marta Tekshirish" mantig'i:
+
+    1) Telegram kanallariga obuna bo'lmagan bo'lsa - odatiy so'rov ko'rsatiladi.
+    2) Telegram bajarilib, faqat Instagram/tashqi qolsa: BIRINCHI «Tekshirish»da
+       Instagram QAYTA ko'rsatiladi (obuna bo'lishga majburlash - manipulatsiya).
+    3) IKKINCHI «Tekshirish»da Instagram tasdiqlanadi (bot uni tekshira olmaydi).
+    """
     from bot.middlewares.subscription import clear_subscription_cache
 
     user = callback.from_user
@@ -255,105 +268,50 @@ async def check_sub_callback(callback: CallbackQuery, bot: Bot):
 
     not_subscribed = await check_subscription(bot, user.id)
 
-    if not_subscribed:
-        # Instagram/tashqi kanal bo'lsa tasdiq kerakligini eslatamiz
-        has_non_checkable = any(not ch.is_checkable for ch in not_subscribed)
-        if has_non_checkable:
-            alert = "❌ Barcha kanallarga obuna bo'ling! Instagram/tashqi uchun «obuna bo'ldim»ni tasdiqlang."
-        else:
-            alert = "❌ Barcha kanallarga obuna bo'ling!"
-        await callback.answer(alert, show_alert=True)
+    # Hammasi joyida
+    if not not_subscribed:
+        _instagram_recheck.pop(user.id, None)
+        await callback.answer("✅ Tasdiqlandi!")
+        await _finalize_subscription_success(callback, user)
+        return
+
+    tg_missing = [ch for ch in not_subscribed if getattr(ch, 'is_checkable', True)]
+    ig_missing = [ch for ch in not_subscribed if not getattr(ch, 'is_checkable', True)]
+
+    # Telegram kanallari hali to'liq emas - avval ularni bajarish shart
+    if tg_missing:
+        _instagram_recheck.pop(user.id, None)  # Instagram bosqichini qayta boshlaymiz
+        await callback.answer("❌ Avval barcha Telegram kanallariga obuna bo'ling!", show_alert=True)
         await _show_current_stage(callback, not_subscribed)
         return
 
-    await callback.answer("✅ Tasdiqlandi!")
-    await _finalize_subscription_success(callback, user)
-
-
-@router.callback_query(F.data.startswith("confirm_ch_yes:"))
-async def confirm_channel_yes_callback(callback: CallbackQuery, bot: Bot):
-    """
-    Instagram / bot / tashqi kanal obunasini YAKUNIY tasdiqlash (ikkinchi bosish).
-
-    Oqim: "Obuna bo'ldim" -> Instagram havolasi qayta ko'rsatiladi (2-tashrif) ->
-    shu tugma. Faqat shu bosqichda DB'ga ChannelSubscription yoziladi
-    (foydalanuvchi Instagram'ga ikki marta tashrif buyurgach).
-    """
-    from bot.middlewares.subscription import clear_subscription_cache
-
-    user = callback.from_user
-    try:
-        channel_pk = int(callback.data.split(":", 1)[1])
-    except (ValueError, IndexError):
-        await callback.answer()
+    # Faqat Instagram/tashqi qoldi
+    if not _instagram_recheck.get(user.id):
+        # BIRINCHI «Tekshirish»: Instagram'ni qayta ko'rsatamiz (2-tashrifga majburlash)
+        _instagram_recheck[user.id] = True
+        await callback.answer(
+            "📸 Instagram sahifasiga obuna bo'ling, so'ng yana «Tekshirish» tugmasini bosing!",
+            show_alert=True
+        )
+        await _show_instagram_recheck(callback, ig_missing)
         return
 
-    channel = await get_channel_by_pk(channel_pk)
-    if not channel or not channel.is_active or channel.is_checkable:
-        await callback.answer("❌ Xatolik", show_alert=True)
-        return
-
-    # Tasdiqni yozamiz + cache tozalaymiz
-    await record_channel_subscriptions(user.id, [channel_pk])
+    # IKKINCHI «Tekshirish»: tasdiqlaymiz
+    _instagram_recheck.pop(user.id, None)
+    await record_channel_subscriptions(user.id, [ch.id for ch in ig_missing])
+    await update_user_joined_channel(user.id, ig_missing[0].id)
     clear_subscription_cache(user.id)
     await callback.answer("✅ Tasdiqlandi!")
-
-    not_subscribed = await check_subscription(bot, user.id)
-    if not_subscribed:
-        await _show_current_stage(callback, not_subscribed)
-        return
-
     await _finalize_subscription_success(callback, user)
 
 
-@router.callback_query(F.data.startswith("confirm_ch:"))
-async def confirm_channel_callback(callback: CallbackQuery, bot: Bot):
-    """
-    Instagram / bot / tashqi kanal "obuna bo'ldim" (BIRINCHI bosish).
-
-    Telegram bot bunday obunani API bilan tekshira olmaydi. Shuning uchun bu bosishda
-    Instagram havolasini QAYTA ko'rsatamiz ("obuna bo'lib qayting") - foydalanuvchi
-    ikkinchi marta Instagram'ga o'tadi. DB'ga HALI YOZILMAYDI; yozish confirm_ch_yes da.
-    """
-    user = callback.from_user
-
-    try:
-        channel_pk = int(callback.data.split(":", 1)[1])
-    except (ValueError, IndexError):
-        await callback.answer()
-        return
-
-    channel = await get_channel_by_pk(channel_pk)
-    if not channel or not channel.is_active:
-        await callback.answer("❌ Kanal topilmadi", show_alert=True)
-        return
-
-    # Tekshirib bo'ladigan (Telegram) kanalni bu tugma orqali tasdiqlashga yo'l qo'ymaymiz
-    if channel.is_checkable:
-        await callback.answer("Bu kanal avtomatik tekshiriladi — obuna bo'ling.", show_alert=True)
-        return
-
-    await callback.answer()
-
-    # Joriy bosqich kanallari (Telegram tugagan bo'lsa - Instagram bosqichi)
-    not_subscribed = await check_subscription(bot, user.id)
-    stage_ids = [ch.id for ch in not_subscribed]
-
-    # Kanal joriy bosqichda bo'lmasa (allaqachon tasdiqlangan yoki Telegram bosqichiga
-    # qaytilgan) - shunchaki joriy holatni ko'rsatamiz
-    if channel_pk not in stage_ids:
-        if not_subscribed:
-            await _show_current_stage(callback, not_subscribed)
-        else:
-            await _finalize_subscription_success(callback, user)
-        return
-
-    # Instagram havolasini QAYTA ko'rsatamiz (2-tashrif) - hali DB'ga yozmaymiz
-    _pending_subscriptions[user.id] = stage_ids
+async def _show_instagram_recheck(callback: CallbackQuery, ig_channels: list):
+    """BIRINCHI «Tekshirish»dan keyin Instagram'ni qayta ko'rsatish (ikkinchi tashrif uchun)."""
+    _pending_subscriptions[callback.from_user.id] = [ch.id for ch in ig_channels]
     try:
         await callback.message.edit_text(
-            subscription_prompt_text(not_subscribed, confirming=True),
-            reply_markup=channels_kb(not_subscribed, confirming_id=channel_pk)
+            subscription_prompt_text(ig_channels, confirming=True),
+            reply_markup=channels_kb(ig_channels)
         )
     except TelegramBadRequest:
         pass

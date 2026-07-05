@@ -30,42 +30,25 @@ def _channel_emoji(channel) -> str:
     return "📢"
 
 
-def channels_kb(channels: list, check: bool = True, confirming_id=None) -> InlineKeyboardMarkup:
-    """Majburiy kanallar (ikki bosqichli oqim).
+def channels_kb(channels: list, check: bool = True) -> InlineKeyboardMarkup:
+    """Majburiy kanallar - faqat havola tugmalari + «Tekshirish».
 
-    - Telegram kanal/guruh (checkable): faqat havola tugmasi. Obuna avtomatik
-      (get_chat_member) tekshiriladi. Bu 1-bosqich.
-    - Instagram / bot / tashqi (non-checkable): havola + "obuna bo'ldim" tugmasi.
-      Bot bunday obunani API bilan tekshira olmaydi -> foydalanuvchi tasdiqlaydi.
-      Bu 2-bosqich (Telegram tugagach ko'rsatiladi).
-
-    confirming_id: shu PK'li non-checkable kanal ikkinchi tashrif tasdig'ini
-    kutmoqda (havola qayta ko'rsatilgan) -> uning tugmasi
-    "Ha, obuna bo'ldim" (confirm_ch_yes:<pk>) ko'rinishida.
+    Har kanal uchun bitta havola tugmasi (tartib raqami bilan). Alohida "obuna
+    bo'ldim" tugmasi YO'Q:
+    - Telegram kanal/guruh: obuna avtomatik (get_chat_member) tekshiriladi.
+    - Instagram / bot / tashqi: bot tekshira olmaydi. "Ikki marta Tekshirish"
+      mantig'i - foydalanuvchi Instagram'ga ikki marta tashrif buyurishga
+      majbur bo'ladi (check_sub_callback'ga qarang).
     """
     builder = InlineKeyboardBuilder()
 
     # Kanallar tartib raqami bilan (1, 2, 3...). Instagram/tashqi (non-checkable)
     # check_subscription'da doim oxirida keladi -> eng oxirgi raqam bo'ladi.
     for i, channel in enumerate(channels, start=1):
-        # is_checkable model instance property'si; not_subscribed model obyektlari uzatiladi
-        checkable = getattr(channel, 'is_checkable', True)
         builder.row(InlineKeyboardButton(
             text=f"{i}. {_channel_emoji(channel)} {channel.title}",
             url=channel.invite_link
         ))
-        if not checkable:
-            if confirming_id is not None and channel.id == confirming_id:
-                # Ikkinchi tasdiq bosqichi
-                builder.row(InlineKeyboardButton(
-                    text="✅ Ha, obuna bo'ldim — tasdiqlayman",
-                    callback_data=f"confirm_ch_yes:{channel.id}"
-                ))
-            else:
-                builder.row(InlineKeyboardButton(
-                    text=f"✅ {channel.title} — obuna bo'ldim",
-                    callback_data=f"confirm_ch:{channel.id}"
-                ))
 
     if check:
         builder.row(InlineKeyboardButton(
@@ -79,13 +62,15 @@ def channels_kb(channels: list, check: bool = True, confirming_id=None) -> Inlin
 def subscription_prompt_text(channels: list, confirming: bool = False) -> str:
     """Obuna so'rovi matni. Barcha kanallar birga ko'rsatiladi (Telegram + Instagram).
 
-    Instagram/tashqi kanal bo'lsa qo'shimcha "obuna bo'ldim" tasdig'i haqida izoh qo'shadi.
+    confirming=True: Telegram bajarilib, faqat Instagram qolganida BIRINCHI
+    «Tekshirish»dan keyingi matn - foydalanuvchini Instagram'ga ikkinchi marta
+    o'tib obuna bo'lishga undaydi.
     """
     if confirming:
         return (
             "📸 <b>Instagram sahifamizga obuna bo'ling</b>\n\n"
             "Yuqoridagi <b>Instagram havolasiga</b> o'ting, obuna bo'ling va shu yerga qayting.\n\n"
-            "So'ng <b>«✅ Ha, obuna bo'ldim»</b> tugmasini bosing."
+            "So'ng yana <b>«🔄 Tekshirish»</b> tugmasini bosing."
         )
 
     has_non_checkable = bool(channels) and any(
@@ -96,8 +81,7 @@ def subscription_prompt_text(channels: list, confirming: bool = False) -> str:
     if has_non_checkable:
         text += (
             "• Telegram kanallariga obuna bo'ling.\n"
-            "• Instagram/tashqi sahifaga o'ting va obuna bo'lgach "
-            "<b>«✅ ... obuna bo'ldim»</b> tugmasini bosib tasdiqlang.\n\n"
+            "• Instagram/tashqi sahifaga o'ting va obuna bo'ling.\n\n"
         )
     text += "So'ng <b>🔄 Tekshirish</b> tugmasini bosing."
     return text

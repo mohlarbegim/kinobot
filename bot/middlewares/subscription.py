@@ -52,7 +52,6 @@ class SubscriptionMiddleware(BaseMiddleware):
             if event.data and (
                 event.data in self.SKIP_CALLBACKS
                 or event.data.startswith('admin:')
-                or event.data.startswith('confirm_ch')  # confirm_ch: va confirm_ch_yes:
             ):
                 return await handler(event, data)
 
