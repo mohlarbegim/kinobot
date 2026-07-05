@@ -220,6 +220,69 @@ class TestConfirmedChannelIds:
         ig.delete(); ext.delete(); user.delete()
 
 
+class TestChannelJoinRequest:
+    """Yopiq kanalga qo'shilish so'rovi (ChannelJoinRequest) - so'rovning o'zi kifoya"""
+
+    def test_join_request_creation(self, db_user, db_channel):
+        from apps.channels.models import ChannelJoinRequest
+
+        jr, created = ChannelJoinRequest.objects.get_or_create(
+            channel=db_channel, user=db_user
+        )
+        assert created is True
+        assert jr.channel == db_channel
+        assert jr.user == db_user
+        jr.delete()
+
+    def test_join_request_unique(self, db_user, db_channel):
+        from apps.channels.models import ChannelJoinRequest
+
+        jr1, c1 = ChannelJoinRequest.objects.get_or_create(channel=db_channel, user=db_user)
+        jr2, c2 = ChannelJoinRequest.objects.get_or_create(channel=db_channel, user=db_user)
+        assert c1 is True
+        assert c2 is False
+        assert jr1.id == jr2.id
+        jr1.delete()
+
+    def test_join_request_separate_from_subscription(self, db_user, db_channel):
+        """Join request va ChannelSubscription ALOHIDA - biri ikkinchisiga aralashmaydi"""
+        from apps.channels.models import ChannelJoinRequest, ChannelSubscription
+
+        ChannelSubscription.objects.create(channel=db_channel, user=db_user)
+        # Obuna yozuvi bor, lekin join request YO'Q
+        assert ChannelJoinRequest.objects.filter(
+            channel=db_channel, user=db_user
+        ).exists() is False
+
+        ChannelSubscription.objects.filter(channel=db_channel, user=db_user).delete()
+
+    def test_get_join_requested_ids_query(self, user_model, channel_model):
+        """get_join_requested_ids mantig'i: user__user_id bo'yicha so'rov yuborilgan pk'lar"""
+        from apps.channels.models import ChannelJoinRequest
+
+        user = user_model.objects.create(user_id=777000222, username='jr', full_name='JR')
+        ch = channel_model.objects.create(
+            channel_id=-1009998887, title='Yopiq kanal',
+            channel_type='telegram_channel', invite_link='https://t.me/+abc', is_active=True,
+        )
+
+        requested = set(
+            ChannelJoinRequest.objects.filter(user__user_id=777000222)
+            .values_list('channel_id', flat=True)
+        )
+        assert requested == set()
+
+        ChannelJoinRequest.objects.create(channel=ch, user=user)
+        requested = set(
+            ChannelJoinRequest.objects.filter(user__user_id=777000222)
+            .values_list('channel_id', flat=True)
+        )
+        assert ch.id in requested
+
+        ChannelJoinRequest.objects.filter(user=user).delete()
+        ch.delete(); user.delete()
+
+
 class TestChannelsKeyboard:
     """channels_kb - non-checkable kanallar uchun tasdiq tugmasi + double-confirm"""
 
@@ -274,8 +337,11 @@ class TestSubscriptionPromptText:
 
     def test_confirming_text(self):
         from bot.keyboards import subscription_prompt_text
+        # Ikkinchi tashrif tasdig'i: Instagram havolasiga qayta o'tishni so'raydi
         text = subscription_prompt_text([self._ns(False)], confirming=True)
-        assert 'Rostdan' in text
+        assert 'Instagram' in text
+        assert 'havola' in text.lower()
+        assert 'obuna bo\'ldim' in text.lower() or 'obuna bo‘ldim' in text.lower()
 
 
 class TestSubscriptionMiddlewareSkip:
@@ -312,6 +378,87 @@ class TestMiddlewareFailOpen:
         # Crash bo'lmasligi + fail-open (kanal o'tkaziladi) -> bo'sh ro'yxat
         result = await mw._check_subscription(bot, 123456789)
         assert result == []
+
+
+class TestMiddlewareJoinRequest:
+    """Yopiq kanalga qo'shilish so'rovi bo'lsa 'left' bo'lsa ham o'tkaziladi"""
+
+    @pytest.mark.asyncio
+    async def test_join_request_satisfies_telegram_gate(self, user_model, channel_model):
+        from unittest.mock import AsyncMock
+        from types import SimpleNamespace
+        from asgiref.sync import sync_to_async
+        from apps.channels.models import ChannelJoinRequest
+        from bot.middlewares.subscription import SubscriptionMiddleware
+
+        @sync_to_async
+        def setup():
+            user = user_model.objects.create(user_id=333444555, username='jr2', full_name='JR2')
+            ch = channel_model.objects.create(
+                channel_id=-1005554443, title='Yopiq', channel_type='telegram_channel',
+                invite_link='https://t.me/+xyz', is_active=True,
+            )
+            # Foydalanuvchi qo'shilish so'rovi yuborgan
+            ChannelJoinRequest.objects.create(channel=ch, user=user)
+            return user, ch
+
+        @sync_to_async
+        def teardown(user, ch):
+            ChannelJoinRequest.objects.filter(user=user).delete()
+            ch.delete(); user.delete()
+
+        user, ch = await setup()
+
+        mw = SubscriptionMiddleware()
+        # Model obyektini uzatamiz (is_checkable property'si ishlashi uchun)
+        mw._get_channels_cached = AsyncMock(return_value=[ch])
+
+        bot = AsyncMock()
+        # get_chat_member 'left' qaytaradi (kanalda a'zo emas, faqat so'rov yuborilgan)
+        bot.get_chat_member = AsyncMock(
+            return_value=SimpleNamespace(status='left')
+        )
+
+        result = await mw._check_subscription(bot, 333444555)
+        # So'rov bor -> kanal missing ro'yxatida BO'LMASLIGI kerak
+        assert result == []
+
+        await teardown(user, ch)
+
+    @pytest.mark.asyncio
+    async def test_left_without_join_request_is_missing(self, user_model, channel_model):
+        from unittest.mock import AsyncMock
+        from types import SimpleNamespace
+        from asgiref.sync import sync_to_async
+        from bot.middlewares.subscription import SubscriptionMiddleware
+
+        @sync_to_async
+        def setup():
+            user = user_model.objects.create(user_id=333444556, username='jr3', full_name='JR3')
+            ch = channel_model.objects.create(
+                channel_id=-1005554444, title='Yopiq2', channel_type='telegram_channel',
+                invite_link='https://t.me/+zzz', is_active=True,
+            )
+            return user, ch
+
+        @sync_to_async
+        def teardown(user, ch):
+            ch.delete(); user.delete()
+
+        user, ch = await setup()
+
+        mw = SubscriptionMiddleware()
+        mw._get_channels_cached = AsyncMock(return_value=[ch])
+
+        bot = AsyncMock()
+        bot.get_chat_member = AsyncMock(return_value=SimpleNamespace(status='left'))
+
+        result = await mw._check_subscription(bot, 333444556)
+        # So'rov YO'Q -> kanal missing bo'lishi kerak
+        assert len(result) == 1
+        assert result[0].id == ch.id
+
+        await teardown(user, ch)
 
 
 class TestReferralSystem:

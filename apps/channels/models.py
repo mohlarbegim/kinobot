@@ -49,6 +49,34 @@ class Channel(models.Model):
         return self.subscriptions.count()
 
 
+class ChannelJoinRequest(models.Model):
+    """
+    Yopiq (private) kanalga qo'shilish so'rovi. Foydalanuvchi yopiq kanalga
+    "qo'shilish so'rovi" yuborgan (hali admin tasdiqlamagan) bo'lsa ham obuna
+    bo'lgan deb hisoblaymiz - so'rov yuborishning o'zi kifoya.
+
+    Bot chat_join_request update'ini olib shu yozuvni yaratadi (bot kanalga
+    admin bo'lishi shart). ChannelSubscription'dan ALOHIDA - aks holda oddiy
+    obuna yozuvi ham "so'rov" deb hisoblanib, kanaldan chiqqan user qayta
+    bloklanmay qolardi.
+    """
+    channel = models.ForeignKey(
+        Channel, on_delete=models.CASCADE, related_name='join_requests', verbose_name='Kanal'
+    )
+    user = models.ForeignKey(
+        'users.User', on_delete=models.CASCADE, related_name='channel_join_requests', verbose_name='Foydalanuvchi'
+    )
+    created_at = models.DateTimeField(default=timezone.now, verbose_name='So\'rov vaqti')
+
+    class Meta:
+        verbose_name = 'Kanalga qo\'shilish so\'rovi'
+        verbose_name_plural = 'Kanalga qo\'shilish so\'rovlari'
+        unique_together = ['channel', 'user']
+
+    def __str__(self):
+        return f"{self.user} -> {self.channel} (so'rov)"
+
+
 class ChannelSubscription(models.Model):
     """Kanal obunasi - user qachon qaysi kanalga obuna bo'lgani"""
 

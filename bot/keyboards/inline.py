@@ -39,8 +39,9 @@ def channels_kb(channels: list, check: bool = True, confirming_id=None) -> Inlin
       Bot bunday obunani API bilan tekshira olmaydi -> foydalanuvchi tasdiqlaydi.
       Bu 2-bosqich (Telegram tugagach ko'rsatiladi).
 
-    confirming_id: shu PK'li non-checkable kanal ikkinchi tasdiq ("Rostdanmi?")
-    kutmoqda -> uning tugmasi "Ha, tasdiqlayman" (confirm_ch_yes:<pk>) ko'rinishida.
+    confirming_id: shu PK'li non-checkable kanal ikkinchi tashrif tasdig'ini
+    kutmoqda (havola qayta ko'rsatilgan) -> uning tugmasi
+    "Ha, obuna bo'ldim" (confirm_ch_yes:<pk>) ko'rinishida.
     """
     builder = InlineKeyboardBuilder()
 
@@ -80,10 +81,9 @@ def subscription_prompt_text(channels: list, confirming: bool = False) -> str:
     """
     if confirming:
         return (
-            "⚠️ <b>Rostdan ham obuna bo'ldingizmi?</b>\n\n"
-            "Havolaga o'tib obuna bo'lganingizni tasdiqlang. "
-            "Yolg'on tasdiq keyinchalik bloklanishga olib kelishi mumkin.\n\n"
-            "Obuna bo'lgan bo'lsangiz <b>«✅ Ha, ... tasdiqlayman»</b> tugmasini bosing."
+            "📸 <b>Instagram sahifamizga obuna bo'ling</b>\n\n"
+            "Yuqoridagi <b>Instagram havolasiga</b> o'ting, obuna bo'ling va shu yerga qayting.\n\n"
+            "So'ng <b>«✅ Ha, obuna bo'ldim»</b> tugmasini bosing."
         )
 
     has_non_checkable = bool(channels) and any(

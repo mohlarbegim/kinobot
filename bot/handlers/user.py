@@ -2,7 +2,7 @@ import random
 import logging
 from aiogram import Router, F, Bot
 from aiogram.filters import CommandStart, Command, StateFilter
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ChatJoinRequest
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
@@ -20,7 +20,7 @@ from bot.keyboards import (
     search_filter_kb, filter_country_kb, filter_language_kb, filter_year_kb,
     flash_sale_tariffs_kb, filter_movies_kb
 )
-from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, esc
+from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, esc
 from apps.payments.models import PendingPaymentSession
 from datetime import timedelta
 from django.utils import timezone as dj_timezone
@@ -226,6 +226,23 @@ async def _show_current_stage(callback: CallbackQuery, not_subscribed: list):
         pass  # Xabar o'zgartirilmagan
 
 
+@router.chat_join_request()
+async def on_chat_join_request(request: ChatJoinRequest):
+    """
+    Yopiq (private) majburiy kanalga qo'shilish so'rovi kelganда - uni obuna deb
+    hisoblaymiz (so'rovning o'zi kifoya, admin tasdig'ini kutmaymiz). Bot kanalga
+    admin bo'lsa shu update keladi.
+    """
+    from bot.middlewares.subscription import clear_subscription_cache
+
+    channel = await get_channel_by_tg_id(request.chat.id)
+    if not channel:
+        return  # bizning majburiy kanalimiz emas
+
+    await record_join_request(request.from_user.id, channel.id)
+    clear_subscription_cache(request.from_user.id)
+
+
 @router.callback_query(F.data == "check_subscription")
 async def check_sub_callback(callback: CallbackQuery, bot: Bot):
     """Obunani tekshirish (barcha kanallar birga: Telegram + Instagram)."""
@@ -258,8 +275,9 @@ async def confirm_channel_yes_callback(callback: CallbackQuery, bot: Bot):
     """
     Instagram / bot / tashqi kanal obunasini YAKUNIY tasdiqlash (ikkinchi bosish).
 
-    "Obuna bo'ldim" -> "Rostdanmi?" -> shu tugma. Faqat shu bosqichda DB'ga
-    ChannelSubscription yoziladi (manipulatsiyani kamaytirish uchun ikki bosish).
+    Oqim: "Obuna bo'ldim" -> Instagram havolasi qayta ko'rsatiladi (2-tashrif) ->
+    shu tugma. Faqat shu bosqichda DB'ga ChannelSubscription yoziladi
+    (foydalanuvchi Instagram'ga ikki marta tashrif buyurgach).
     """
     from bot.middlewares.subscription import clear_subscription_cache
 
@@ -293,9 +311,9 @@ async def confirm_channel_callback(callback: CallbackQuery, bot: Bot):
     """
     Instagram / bot / tashqi kanal "obuna bo'ldim" (BIRINCHI bosish).
 
-    Telegram bot bunday obunani API bilan tekshira olmaydi. Manipulatsiyani
-    kamaytirish uchun ikkinchi tasdiq so'raymiz: bu bosishda faqat "Rostdanmi?"
-    so'rovi chiqadi, DB'ga HALI YOZILMAYDI. Yozish confirm_ch_yes da bo'ladi.
+    Telegram bot bunday obunani API bilan tekshira olmaydi. Shuning uchun bu bosishda
+    Instagram havolasini QAYTA ko'rsatamiz ("obuna bo'lib qayting") - foydalanuvchi
+    ikkinchi marta Instagram'ga o'tadi. DB'ga HALI YOZILMAYDI; yozish confirm_ch_yes da.
     """
     user = callback.from_user
 
@@ -330,7 +348,7 @@ async def confirm_channel_callback(callback: CallbackQuery, bot: Bot):
             await _finalize_subscription_success(callback, user)
         return
 
-    # "Rostdan obuna bo'ldingizmi?" - ikkinchi tasdiqni so'raymiz (DB'ga yozmaymiz)
+    # Instagram havolasini QAYTA ko'rsatamiz (2-tashrif) - hali DB'ga yozmaymiz
     _pending_subscriptions[user.id] = stage_ids
     try:
         await callback.message.edit_text(
@@ -1559,33 +1577,38 @@ async def help_handler(message: Message):
 
 async def check_subscription(bot: Bot, user_id: int) -> list:
     """
-    Kanalga obunani tekshirish. Bajarilmagan BARCHA kanallarni birga qaytaradi
-    (Telegram + Instagram - bitta ekranda). Bo'sh ro'yxat = hammasi bajarilgan.
+    Obunani tekshirish. Bajarilmagan barcha kanallar birga qaytadi (Telegram + Instagram).
 
-    - Telegram kanal/guruh (checkable): get_chat_member orqali HAQIQIY tekshiriladi.
-    - Instagram / bot / tashqi (non-checkable): Telegram API tekshira olmaydi,
-      foydalanuvchi "obuna bo'ldim" bilan tasdiqlaydi (ChannelSubscription).
+    - Telegram kanal/guruh (checkable): MAJBURIY. get_chat_member bilan tekshiriladi.
+      Yopiq kanalga qo'shilish so'rovi (chat_join_request) yuborgan bo'lsa ham
+      obuna bo'lgan hisoblanadi (so'rovning o'zi kifoya).
+    - Instagram / bot / tashqi (non-checkable): MAJBURIY, lekin bot tekshira olmaydi ->
+      foydalanuvchi "obuna bo'ldim" -> Instagram'ga qayta o'tib tasdiqlaydi (ikki tashrif).
     """
     channels = await get_active_channels()
     checkable_missing = []
     noncheckable_missing = []
-    confirmed_ids = None  # lazy - faqat non-checkable kanal uchraganda yuklanadi
+    confirmed_ids = None     # lazy - Instagram tasdiqlari
+    requested_ids = None     # lazy - yopiq kanal join request'lari
 
     for channel in channels:
         if channel.is_checkable:
             try:
                 member = await bot.get_chat_member(channel.channel_id, user_id)
                 if member.status in ['left', 'kicked']:
-                    checkable_missing.append(channel)
+                    # A'zo emas - lekin yopiq kanalga qo'shilish so'rovi yuborgan bo'lishi mumkin
+                    if requested_ids is None:
+                        requested_ids = await get_join_requested_ids(user_id)
+                    if channel.id not in requested_ids:
+                        checkable_missing.append(channel)
             except TelegramBadRequest as e:
                 # Bot kanalni tekshira olmadi (admin emas / kanal topilmadi) -> foydalanuvchini
                 # BLOKLAMAYMIZ (fail-open), aks holda bitta noto'g'ri kanal hammani qulflaydi.
-                # Middleware bilan bir xil xatti-harakat; admin ko'rishi uchun log yozamiz.
                 logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
             except Exception as e:
                 logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
         else:
-            # Instagram / bot / tashqi - tasdiq (honor-system) orqali
+            # Instagram / bot / tashqi - tasdiq (ikki tashrif) orqali
             if confirmed_ids is None:
                 confirmed_ids = await get_confirmed_channel_ids(user_id)
             if channel.id not in confirmed_ids:

@@ -84,42 +84,46 @@ class SubscriptionMiddleware(BaseMiddleware):
 
     async def _check_subscription(self, bot: Bot, user_id: int) -> list:
         """
-        Obunani tekshirish. Bajarilmagan BARCHA kanallarni birga qaytaradi
-        (Telegram + Instagram - bitta ekranda). Handlerdagi check_subscription bilan bir xil.
+        Obunani tekshirish. Handlerdagi check_subscription bilan bir xil.
 
-        - Telegram (checkable): get_chat_member orqali HAQIQIY tekshiriladi.
-        - Instagram / bot / tashqi (non-checkable): "Obuna bo'ldim" tasdig'i (ChannelSubscription).
+        - Telegram (checkable): MAJBURIY. get_chat_member; yopiq kanalga qo'shilish
+          so'rovi (chat_join_request) yuborgan bo'lsa ham o'tadi.
+        - Instagram / bot / tashqi (non-checkable): MAJBURIY, "obuna bo'ldim" tasdig'i
+          (ikki tashrif) orqali.
+
+        Bajarilmagan barcha kanallar birga qaytadi (Telegram + Instagram).
         """
-        from bot.utils import get_confirmed_channel_ids
+        from bot.utils import get_confirmed_channel_ids, get_join_requested_ids
 
         channels = await self._get_channels_cached()
         checkable_missing = []
         noncheckable_missing = []
-        confirmed_ids = None  # lazy - faqat non-checkable kanal bo'lsa yuklanadi
+        confirmed_ids = None  # lazy - Instagram tasdiqlari
+        requested_ids = None  # lazy - yopiq kanal join request'lari
 
         for channel in channels:
             if channel.is_checkable:
                 try:
                     member = await bot.get_chat_member(channel.channel_id, user_id)
                     if member.status in ['left', 'kicked']:
-                        checkable_missing.append(channel)
+                        if requested_ids is None:
+                            requested_ids = await get_join_requested_ids(user_id)
+                        if channel.id not in requested_ids:
+                            checkable_missing.append(channel)
                 except TelegramBadRequest as e:
                     # Bot kanalni tekshira olmadi (admin emas / topilmadi) -> fail-open (o'tkazamiz),
                     # lekin admin sozlamani tuzatishi uchun warning log yozamiz.
                     logger.warning(f"Obunani tekshirib bo'lmadi (channel_id={channel.channel_id}): {e}")
                 except Exception as e:
-                    # TelegramForbiddenError ("bot is not a member of the channel chat") va boshqa
-                    # kutilmagan xatolar ham fail-open bo'lishi kerak, aks holda har bir foydalanuvchi
-                    # update'i global error handler'ga chiqib ketadi (handler check_subscription bilan bir xil).
+                    # TelegramForbiddenError ("bot is not a member...") va boshqalar ham fail-open.
                     logger.warning(f"Obunani tekshirishda kutilmagan xato (channel_id={channel.channel_id}): {e}")
             else:
-                # Instagram / bot / tashqi - tasdiq (honor-system) orqali
+                # Instagram / bot / tashqi - tasdiq (ikki tashrif) orqali
                 if confirmed_ids is None:
                     confirmed_ids = await get_confirmed_channel_ids(user_id)
                 if channel.id not in confirmed_ids:
                     noncheckable_missing.append(channel)
 
-        # Barcha bajarilmagan kanallar birga (Telegram + Instagram) - bitta ekranda
         return checkable_missing + noncheckable_missing
 
     async def _get_channels_cached(self):

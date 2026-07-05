@@ -176,6 +176,34 @@ def get_confirmed_channel_ids(user_id: int) -> set:
 
 
 @sync_to_async
+def get_channel_by_tg_id(tg_chat_id: int):
+    """Telegram chat id bo'yicha aktiv majburiy kanalni topish (join request uchun)."""
+    return Channel.objects.filter(channel_id=tg_chat_id, is_active=True).first()
+
+
+@sync_to_async
+def record_join_request(user_id: int, channel_pk: int):
+    """Foydalanuvchining yopiq kanalga qo'shilish so'rovini yozish."""
+    from apps.channels.models import ChannelJoinRequest
+    try:
+        user = User.objects.get(user_id=user_id)
+    except User.DoesNotExist:
+        return
+    ChannelJoinRequest.objects.get_or_create(channel_id=channel_pk, user=user)
+
+
+@sync_to_async
+def get_join_requested_ids(user_id: int) -> set:
+    """Foydalanuvchi qo'shilish so'rovi yuborgan kanallar (Channel PK) to'plami."""
+    from apps.channels.models import ChannelJoinRequest
+    return set(
+        ChannelJoinRequest.objects
+        .filter(user__user_id=user_id)
+        .values_list('channel_id', flat=True)
+    )
+
+
+@sync_to_async
 def get_channel_subscription_count(channel_pk: int) -> int:
     """Kanal obunachilari sonini olish"""
     from apps.channels.models import ChannelSubscription
