@@ -170,6 +170,66 @@ class TestPremiumRequiredWired:
         assert out == 'MENING YANGI MATNIM: Salaar'
         MessageTemplate.objects.filter(message_type='premium_required').delete()
 
+    async def test_title_shown_when_template_has_no_placeholder(self):
+        """REGRESSIYA: eski shablonда {title} YO'Q -> kino nomi yo'qolib qolgandi.
+
+        Admin shablonni {title} qo'shilishidan oldin tahrirlagan bo'lsa, DB'dagi
+        matnда placeholder yo'q. Nom baribir ko'rinishi kerak.
+        """
+        from bot.handlers.user import premium_required_text
+        from apps.core.models import MessageTemplate
+        from asgiref.sync import sync_to_async
+        from types import SimpleNamespace
+
+        await sync_to_async(MessageTemplate.objects.update_or_create)(
+            message_type='premium_required',
+            defaults={'title': 'P', 'content': 'Bu kino faqat Premium uchun.'},  # {title} YO'Q
+        )
+        movie = SimpleNamespace(display_title='Avatar 2')
+
+        text = await premium_required_text(movie)
+
+        assert 'Avatar 2' in text                    # nom baribir bor
+        assert 'Bu kino faqat Premium uchun.' in text  # admin matni ham saqlangan
+        await sync_to_async(MessageTemplate.objects.filter(message_type='premium_required').delete)()
+
+    async def test_title_not_duplicated_when_placeholder_used(self):
+        """Shablonда {title} bor bo'lsa - nom IKKI marta chiqmasligi kerak."""
+        from bot.handlers.user import premium_required_text
+        from apps.core.models import MessageTemplate
+        from asgiref.sync import sync_to_async
+        from types import SimpleNamespace
+
+        await sync_to_async(MessageTemplate.objects.update_or_create)(
+            message_type='premium_required',
+            defaults={'title': 'P', 'content': '{title} — premium kino'},
+        )
+        movie = SimpleNamespace(display_title='Salaar')
+
+        text = await premium_required_text(movie)
+
+        assert text.count('Salaar') == 1
+        await sync_to_async(MessageTemplate.objects.filter(message_type='premium_required').delete)()
+
+    async def test_alert_is_plain_but_keeps_title(self):
+        """Alert HTML'siz bo'ladi, lekin kino nomi qolishi kerak."""
+        from bot.handlers.user import premium_required_alert
+        from apps.core.models import MessageTemplate
+        from asgiref.sync import sync_to_async
+        from types import SimpleNamespace
+
+        await sync_to_async(MessageTemplate.objects.update_or_create)(
+            message_type='premium_required',
+            defaults={'title': 'P', 'content': 'Premium kerak.'},
+        )
+        movie = SimpleNamespace(display_title='Interstellar')
+
+        text = await premium_required_alert(movie)
+
+        assert 'Interstellar' in text
+        assert '<b>' not in text  # alert HTML'ni qo'llab-quvvatlamaydi
+        await sync_to_async(MessageTemplate.objects.filter(message_type='premium_required').delete)()
+
     async def test_paywall_sends_template(self, movie_model, monkeypatch):
         """get_movie_by_code premium paywall'da shablonni yuboradi (hardcoded emas)."""
         import bot.handlers.user as u

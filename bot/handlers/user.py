@@ -181,6 +181,26 @@ def save_last_movie_messages(user_id: int, message_ids: list):
     User.objects.filter(user_id=user_id).update(last_movie_message_ids=list(message_ids or []))
 
 
+async def premium_required_text(movie) -> str:
+    """Premium paywall matni (admin tahrirlaydigan `premium_required` shablonidan).
+
+    Shablonда {title} bo'lmasa - kino nomini OLDIGA qo'shamiz. Sabab: eski
+    shablonда {title} placeholder'i yo'q edi, admin uni allaqachon tahrirlagan
+    bo'lsa shablon DB'da {title}'siz turadi va foydalanuvchi qaysi kino premium
+    ekanini bilmay qolardi. Shablonда {title} bor bo'lsa - takrorlamaymiz.
+    """
+    title = safe_html(movie.display_title)
+    text = await get_message_text('premium_required', title=title)
+    if title and title not in text:
+        text = f"💎 <b>{title}</b>\n\n{text}"
+    return text
+
+
+async def premium_required_alert(movie) -> str:
+    """Premium paywall matni Telegram ALERT uchun (HTML yo'q, 200 belgi)."""
+    return to_plain(await premium_required_text(movie))
+
+
 async def check_user_subscription(bot: Bot, user_id: int, db_user: User = None) -> list:
     """
     Foydalanuvchi obunasini tekshirish.
@@ -507,7 +527,7 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
         else:
             is_admin = await is_user_admin(user_id)
             await message.answer(
-                await get_message_text('premium_required', title=safe_html(movie.display_title)),
+                await premium_required_text(movie),
                 reply_markup=main_menu_inline_kb(is_admin=is_admin)
             )
         return
@@ -607,7 +627,7 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
     # Premium tekshirish
     if movie.is_premium and not (db_user and db_user.is_premium_active):
         await callback.answer(
-            to_plain(await get_message_text('premium_required', title=movie.display_title)),
+            await premium_required_alert(movie),
             show_alert=True
         )
         return
@@ -958,7 +978,7 @@ async def random_movie_handler(message: Message, db_user: User = None, bot: Bot 
     if movie.is_premium and not (db_user and db_user.is_premium_active):
         is_admin = await is_user_admin(user_id)
         await message.answer(
-            await get_message_text('premium_required', title=safe_html(movie.display_title)),
+            await premium_required_text(movie),
             reply_markup=main_menu_inline_kb(is_admin=is_admin)
         )
         return
@@ -1166,7 +1186,7 @@ async def movie_callback(callback: CallbackQuery, db_user: User = None, bot: Bot
 
     if movie.is_premium and not (db_user and db_user.is_premium_active):
         await callback.answer(
-            to_plain(await get_message_text('premium_required', title=movie.display_title)),
+            await premium_required_alert(movie),
             show_alert=True
         )
         return
@@ -1723,7 +1743,7 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
     # Premium check
     if movie.is_premium and not (db_user and db_user.is_premium_active):
         await callback.answer(
-            to_plain(await get_message_text('premium_required', title=movie.display_title)),
+            await premium_required_alert(movie),
             show_alert=True
         )
         return
@@ -1776,7 +1796,7 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
 
     if movie.is_premium and not (db_user and db_user.is_premium_active):
         await callback.answer(
-            to_plain(await get_message_text('premium_required', title=movie.display_title)),
+            await premium_required_alert(movie),
             show_alert=True
         )
         return
