@@ -27,10 +27,17 @@ TOP_MOVIES_LIMIT = 10
 PENDING_PAYMENT_TIMEOUT = 1800  # 30 daqiqa (sekundlarda)
 
 # Yopiq kanalga qo'shilish so'rovi necha kun "obuna" deb hisoblanadi.
-# So'rov bekor qilingan/rad etilgan bo'lsa Telegram signal bermaydi, shuning uchun
-# yozuv abadiy qolib cheksiz kirish bermasligi uchun vaqt oynasi qo'yamiz. Undan keyin
-# get_chat_member qayta tekshiradi (tasdiqlangan bo'lsa a'zo bo'ladi, aks holda qayta so'raladi).
-JOIN_REQUEST_TTL_DAYS = 7
+# 0 = MUDDATSIZ (standart): zayavka tashlagan foydalanuvchi doim a'zo deb hisoblanadi.
+#
+# NEGA 0: admin zayavkani tasdiqlamasa (odatiy holat - "zayavka" kanallarida so'rovlar
+# yig'ilib turadi), muddat tugagach user QAYTA bloklanardi va o'zi tuzata olmasdi -
+# Telegram takroriy so'rovga ruxsat bermaydi ("request already sent"). Bu asosiy shikoyat edi.
+#
+# Musbat qiymat qo'yilsa vaqt oynasi ishlaydi (bekor qilingan/rad etilgan so'rov Telegram
+# signal bermaydi, shuning uchun muddatdan keyin get_chat_member qayta tekshiradi).
+# Eslatma: kanaldan CHIQIB ketish chat_member update orqali baribir aniqlanadi va
+# yozuv o'chiriladi (remove_channel_membership) - muddatsiz bo'lsa ham.
+JOIN_REQUEST_TTL_DAYS = 0
 
 # Validation
 MAX_MOVIE_CODE_LENGTH = 10

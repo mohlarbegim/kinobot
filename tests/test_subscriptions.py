@@ -282,13 +282,46 @@ class TestChannelJoinRequest:
         ChannelJoinRequest.objects.filter(user=user).delete()
         ch.delete(); user.delete()
 
-    def test_old_join_request_not_counted(self, user_model, channel_model):
-        """JOIN_REQUEST_TTL_DAYS'dan eski so'rov hisobga olinmaydi (bekor/rad bypass oldini olish)"""
+    def test_old_join_request_counted_when_ttl_disabled(self, user_model, channel_model):
+        """TTL=0 (standart) -> eski so'rov ham hisobga olinadi (MUDDATSIZ).
+
+        Admin zayavkani tasdiqlamasa user qayta bloklanmasligi kerak - u zayavkani
+        qayta yubora olmaydi (Telegram "request already sent" deydi).
+        """
         from datetime import timedelta
         from django.utils import timezone
         from apps.channels.models import ChannelJoinRequest
         from bot.utils.helpers import get_join_requested_ids
-        from bot.constants import JOIN_REQUEST_TTL_DAYS
+        import bot.constants as consts
+
+        assert consts.JOIN_REQUEST_TTL_DAYS == 0, "standart muddatsiz bo'lishi kerak"
+
+        user = user_model.objects.create(user_id=777000334, username='old2', full_name='Old2')
+        ch = channel_model.objects.create(
+            channel_id=-1009998887, title='Yopiq', channel_type='telegram_channel',
+            invite_link='https://t.me/+old2', is_active=True,
+        )
+        jr = ChannelJoinRequest.objects.create(channel=ch, user=user)
+        ChannelJoinRequest.objects.filter(pk=jr.pk).update(
+            created_at=timezone.now() - timedelta(days=365)
+        )
+
+        requested = get_join_requested_ids.func(777000334)
+        assert ch.id in requested  # 1 yillik so'rov ham amal qiladi
+
+        ChannelJoinRequest.objects.filter(user=user).delete()
+        ch.delete(); user.delete()
+
+    def test_old_join_request_not_counted_when_ttl_set(self, user_model, channel_model, monkeypatch):
+        """TTL musbat bo'lsa - eski so'rov hisobga olinmaydi (vaqt oynasi ishlaydi)."""
+        from datetime import timedelta
+        from django.utils import timezone
+        from apps.channels.models import ChannelJoinRequest
+        from bot.utils.helpers import get_join_requested_ids
+        import bot.constants as consts
+
+        # get_join_requested_ids konstantani chaqiruv paytida import qiladi
+        monkeypatch.setattr(consts, 'JOIN_REQUEST_TTL_DAYS', 7)
 
         user = user_model.objects.create(user_id=777000333, username='old', full_name='Old')
         ch = channel_model.objects.create(
@@ -296,12 +329,57 @@ class TestChannelJoinRequest:
             invite_link='https://t.me/+old', is_active=True,
         )
         jr = ChannelJoinRequest.objects.create(channel=ch, user=user)
-        old_time = timezone.now() - timedelta(days=JOIN_REQUEST_TTL_DAYS + 1)
-        ChannelJoinRequest.objects.filter(pk=jr.pk).update(created_at=old_time)
+        ChannelJoinRequest.objects.filter(pk=jr.pk).update(
+            created_at=timezone.now() - timedelta(days=8)
+        )
 
-        # .func - @sync_to_async ostidagi asl sync funksiya
         requested = get_join_requested_ids.func(777000333)
         assert ch.id not in requested
+
+        ChannelJoinRequest.objects.filter(user=user).delete()
+        ch.delete(); user.delete()
+
+    def test_join_request_creates_missing_user(self, user_model, channel_model):
+        """/start bosmagan user zayavka tashlasa - user YARATILADI va so'rov yoziladi."""
+        from apps.channels.models import ChannelJoinRequest
+        from bot.utils.helpers import record_join_request
+
+        user_model.objects.filter(user_id=777000335).delete()
+        ch = channel_model.objects.create(
+            channel_id=-1009998888, title='Yopiq', channel_type='telegram_channel',
+            invite_link='https://t.me/+new', is_active=True,
+        )
+
+        record_join_request.func(777000335, ch.id, username='newbie', full_name='New Bie')
+
+        user = user_model.objects.get(user_id=777000335)
+        assert user.full_name == 'New Bie'
+        assert ChannelJoinRequest.objects.filter(channel=ch, user=user).exists()
+
+        ChannelJoinRequest.objects.filter(user=user).delete()
+        ch.delete(); user.delete()
+
+    def test_repeat_join_request_refreshes_timestamp(self, user_model, channel_model):
+        """Takroriy so'rov created_at'ni YANGILAYDI (get_or_create eskisini qoldirardi)."""
+        from datetime import timedelta
+        from django.utils import timezone
+        from apps.channels.models import ChannelJoinRequest
+        from bot.utils.helpers import record_join_request
+
+        user = user_model.objects.create(user_id=777000336, username='rep', full_name='Rep')
+        ch = channel_model.objects.create(
+            channel_id=-1009998889, title='Yopiq', channel_type='telegram_channel',
+            invite_link='https://t.me/+rep', is_active=True,
+        )
+        jr = ChannelJoinRequest.objects.create(channel=ch, user=user)
+        old = timezone.now() - timedelta(days=30)
+        ChannelJoinRequest.objects.filter(pk=jr.pk).update(created_at=old)
+
+        record_join_request.func(777000336, ch.id, username='rep', full_name='Rep')
+
+        jr.refresh_from_db()
+        assert jr.created_at > old  # yangilandi
+        assert ChannelJoinRequest.objects.filter(channel=ch, user=user).count() == 1
 
         ChannelJoinRequest.objects.filter(user=user).delete()
         ch.delete(); user.delete()

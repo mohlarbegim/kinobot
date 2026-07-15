@@ -216,6 +216,11 @@ def _parse_admin_ids(raw: str):
 
 ADMINS = _parse_admin_ids(os.getenv('ADMINS', ''))
 
+# Xatolik/bug kanali - bot ishlashida yuz bergan xatolar shu kanalga yuboriladi.
+# Bot shu kanalda ADMIN bo'lishi shart. Bo'sh bo'lsa - xabar yuborilmaydi (faqat log).
+# Railway'da BUG_CHANNEL_ID env orqali o'zgartirish mumkin.
+BUG_CHANNEL_ID = os.getenv('BUG_CHANNEL_ID', '-1004470243589')
+
 # Payment settings
 DEFAULT_CARD_NUMBER = os.getenv('DEFAULT_CARD_NUMBER', '8600 0000 0000 0000')
 DEFAULT_CARD_HOLDER = os.getenv('DEFAULT_CARD_HOLDER', 'CARD HOLDER')

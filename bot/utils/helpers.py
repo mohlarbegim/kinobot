@@ -1,8 +1,10 @@
 from datetime import datetime
 from typing import Optional
 from html import escape as _html_escape
+from html import unescape as _html_unescape
 import asyncio
 import logging
+import re
 
 from apps.users.models import User
 from apps.channels.models import Channel
@@ -13,15 +15,79 @@ logger = logging.getLogger(__name__)
 
 
 def esc(value) -> str:
-    """HTML parse_mode uchun xavfsiz matn.
+    """HTML parse_mode uchun xavfsiz matn (formatlash YO'Q).
 
-    Foydalanuvchi/admin kiritgan matnni (ism, kino nomi, tavsif) HTML xabarga
-    joylashdan oldin '&', '<', '>' belgilarini escape qiladi. Aks holda ism ichida
-    '&' yoki '<' bo'lsa Telegram "can't parse entities" xatosini beradi.
+    ISHONCHSIZ matn uchun: foydalanuvchi ismi (full_name), username, qidiruv so'rovi,
+    kino so'rovi nomi, user kiritgan kod. Bularda '&', '<', '>' escape qilinadi.
+    Foydalanuvchi o'z ismini "<b>x" qilib qo'yishi mumkin - shablonlar uni xom
+    almashtiradi, shuning uchun bu yerdagi escape YAGONA himoya. OLIB TASHLAMANG.
+
+    Admin yozgan matn (kino nomi/tavsifi, e'lon) uchun safe_html() ishlating -
+    u bold/italic'ni saqlaydi.
     """
     if value is None:
         return ""
     return _html_escape(str(value), quote=False)
+
+
+# Telegram HTML parse_mode qo'llab-quvvatlaydigan teglar (rasmiy ro'yxat).
+# <a href> alohida ishlanadi (unda atribut bor).
+_TG_TAGS = 'b|strong|i|em|u|ins|s|strike|del|code|pre|tg-spoiler|blockquote'
+_TG_TAG_RE = re.compile(rf'&lt;(/?)({_TG_TAGS})&gt;', re.IGNORECASE)
+_TG_A_OPEN_RE = re.compile(r'&lt;a href="([^"<>]*)"&gt;', re.IGNORECASE)
+_TG_A_CLOSE_RE = re.compile(r'&lt;/a&gt;', re.IGNORECASE)
+
+
+def safe_html(value) -> str:
+    """ADMIN yozgan matnni formatlashni SAQLAB, xavfsiz HTML'ga aylantirish.
+
+    Avval hamma narsa escape qilinadi, so'ng Telegram qo'llab-quvvatlaydigan
+    teglargina qaytariladi (whitelist). Natijada:
+      - <b>qalin</b> / <i>qiya</i> ISHLAYDI (ilgari esc() ularni matnga aylantirardi),
+      - kino nomidagi tasodifiy '&' yoki '<' Telegram "can't parse entities"
+        xatosini BERMAYDI (xom qoldirsak berardi - kino yuborishда fallback yo'q).
+
+    Faqat ISHONCHLI (admin kiritgan) maydonlar uchun: kino nomi, tavsif, e'lon matni.
+    Foydalanuvchi kiritgan matnga esc() ishlating.
+    """
+    if value is None:
+        return ""
+    txt = _html_escape(str(value), quote=False)
+    txt = _TG_TAG_RE.sub(r'<\1\2>', txt)
+    txt = _TG_A_OPEN_RE.sub(lambda m: f'<a href="{m.group(1).replace("&amp;", "&")}">', txt)
+    txt = _TG_A_CLOSE_RE.sub('</a>', txt)
+    return txt
+
+
+def html_text_of(message) -> str:
+    """Xabar matnini (yoki caption'ini) FORMATLASH bilan olish.
+
+    message.text Telegram formatlashini YO'QOTADI - u sof matn qaytaradi, shuning
+    uchun admin Telegram'da qalin/qiya qilib yozgan matn botda oddiy bo'lib chiqardi.
+    message.html_text entity'larni HTML teglarga aylantiradi (<b>, <i>, <a href> ...),
+    bot esa HTML parse_mode bilan yuboradi - formatlash saqlanadi.
+
+    aiogram matn ham caption ham bo'lmasa TypeError beradi - himoyalangan.
+    """
+    try:
+        return message.html_text
+    except (TypeError, AttributeError):
+        return message.text or message.caption or ""
+
+
+def to_plain(value, limit: int = 200) -> str:
+    """HTML matnni SOF matnga aylantirish (Telegram alert uchun).
+
+    callback.answer(show_alert=True) HTML'ni QO'LLAB-QUVVATLAMAYDI va ~200 belgi
+    bilan cheklangan. Shablon HTML bilan yozilgan bo'lsa, teglar alertда xom
+    ko'rinib qolmasligi uchun olib tashlanadi va matn qisqartiriladi.
+    """
+    if value is None:
+        return ""
+    txt = re.sub(r'<[^>]+>', '', str(value))
+    txt = _html_unescape(txt)
+    txt = re.sub(r'\n{2,}', '\n', txt).strip()
+    return txt[:limit]
 
 
 @sync_to_async
@@ -195,35 +261,49 @@ def get_channel_by_tg_id(tg_chat_id: int):
 
 
 @sync_to_async
-def record_join_request(user_id: int, channel_pk: int):
-    """Foydalanuvchining yopiq kanalga qo'shilish so'rovini yozish."""
+def record_join_request(user_id: int, channel_pk: int, username: str = None, full_name: str = None):
+    """Foydalanuvchining yopiq kanalga qo'shilish so'rovini yozish.
+
+    User bazada bo'lmasa YARATAMIZ: /start bosmasdan turib kanalga zayavka tashlagan
+    foydalanuvchi (masalan botga emas, kanalga birinchi kelgan) ham hisobga olinishi
+    kerak. Ilgari bunday user'ning so'rovi jimgina tashlab yuborilardi va u keyin
+    botda abadiy bloklanib qolardi (zayavkani qayta yubora olmaydi).
+
+    Takroriy so'rovda created_at YANGILANADI (get_or_create eskisini qoldirardi -
+    bekor qilib qayta yuborgan user eski vaqt bilan qolib ketardi).
+    """
     from apps.channels.models import ChannelJoinRequest
-    try:
-        user = User.objects.get(user_id=user_id)
-    except User.DoesNotExist:
-        return
-    ChannelJoinRequest.objects.get_or_create(channel_id=channel_pk, user=user)
+    from django.utils import timezone
+
+    user, _ = User.objects.get_or_create(
+        user_id=user_id,
+        defaults={'username': username, 'full_name': full_name or ''},
+    )
+    ChannelJoinRequest.objects.update_or_create(
+        channel_id=channel_pk, user=user,
+        defaults={'created_at': timezone.now()},
+    )
 
 
 @sync_to_async
 def get_join_requested_ids(user_id: int) -> set:
     """Foydalanuvchi qo'shilish so'rovi yuborgan kanallar (Channel PK) to'plami.
 
-    Faqat oxirgi JOIN_REQUEST_TTL_DAYS ichidagi so'rovlar hisobga olinadi: bekor
-    qilingan/rad etilgan so'rov Telegram signal bermaydi, shuning uchun eski yozuv
-    cheksiz kirish bermasligi uchun vaqt oynasidan keyin get_chat_member qayta tekshiradi.
+    JOIN_REQUEST_TTL_DAYS = 0 (standart) -> MUDDATSIZ: barcha so'rovlar hisobga olinadi.
+    Musbat qiymatда faqat shu kun ichidagi so'rovlar hisobga olinadi (bekor qilingan/
+    rad etilgan so'rov Telegram signal bermaydi, shuning uchun muddatdan keyin
+    get_chat_member qayta tekshiradi).
     """
     from datetime import timedelta
     from django.utils import timezone
     from apps.channels.models import ChannelJoinRequest
     from bot.constants import JOIN_REQUEST_TTL_DAYS
 
-    cutoff = timezone.now() - timedelta(days=JOIN_REQUEST_TTL_DAYS)
-    return set(
-        ChannelJoinRequest.objects
-        .filter(user__user_id=user_id, created_at__gte=cutoff)
-        .values_list('channel_id', flat=True)
-    )
+    qs = ChannelJoinRequest.objects.filter(user__user_id=user_id)
+    if JOIN_REQUEST_TTL_DAYS > 0:
+        cutoff = timezone.now() - timedelta(days=JOIN_REQUEST_TTL_DAYS)
+        qs = qs.filter(created_at__gte=cutoff)
+    return set(qs.values_list('channel_id', flat=True))
 
 
 async def compute_missing_channels(bot, user_id: int, channels: list) -> list:

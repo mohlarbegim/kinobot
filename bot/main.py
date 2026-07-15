@@ -14,6 +14,7 @@ from django.conf import settings
 from bot.loader import bot, dp
 from bot.handlers import router
 from bot.middlewares import DatabaseMiddleware, SubscriptionMiddleware, ThrottlingMiddleware
+from bot.utils.error_reporter import report_error
 
 # Logging
 logging.basicConfig(
@@ -118,6 +119,7 @@ async def error_handler(event: ErrorEvent):
             f"Telegram API xatosi: {exception}. "
             f"Update ID: {update.update_id if update else 'N/A'}"
         )
+        await report_error(bot, exception, update)
         return True
 
     # Noma'lum xatolar - loglash
@@ -126,6 +128,8 @@ async def error_handler(event: ErrorEvent):
         f"Update ID: {update.update_id if update else 'N/A'}",
         exc_info=exception
     )
+    # Bug kanaliga yuborish (sozlanmagan bo'lsa jimgina o'tadi, xato tashlamaydi)
+    await report_error(bot, exception, update)
     return True
 
 

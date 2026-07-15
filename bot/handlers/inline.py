@@ -7,7 +7,7 @@ from asgiref.sync import sync_to_async
 from hashlib import md5
 
 from apps.movies.models import Movie
-from bot.utils import esc
+from bot.utils import esc, safe_html
 
 router = Router()
 
@@ -68,7 +68,7 @@ async def inline_search(inline_query: InlineQuery):
                 description="Premium kino — ko'rish uchun Premium sotib oling",
                 input_message_content=InputTextMessageContent(
                     message_text=(
-                        f"💎 <b>{esc(movie.display_title)}</b>\n\n"
+                        f"💎 <b>{safe_html(movie.display_title)}</b>\n\n"
                         "Bu <b>Premium</b> kino. Ko'rish uchun Premium sotib oling.\n"
                         "👉 /premium"
                     ),
@@ -77,7 +77,7 @@ async def inline_search(inline_query: InlineQuery):
             ))
             continue
 
-        caption = f"🎬 <b>{esc(movie.display_title)}</b>\n📝 Kod: <code>{esc(movie.code)}</code>"
+        caption = f"🎬 <b>{safe_html(movie.display_title)}</b>\n📝 Kod: <code>{esc(movie.code)}</code>"
 
         if movie.file_id:
             # Video bor -> cached video natija

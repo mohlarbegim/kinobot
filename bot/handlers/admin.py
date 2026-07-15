@@ -20,7 +20,7 @@ from bot.keyboards import (
     main_menu_inline_kb, back_kb, admin_messages_kb
 )
 from apps.channels.models import Channel
-from bot.utils import format_number, esc
+from bot.utils import format_number, esc, safe_html, html_text_of
 from bot.middlewares.database import clear_user_cache
 
 router = Router()
@@ -228,7 +228,7 @@ async def admin_movie_view(callback: CallbackQuery):
     country_text = movie.get_country_display() if hasattr(movie, 'get_country_display') else "Yo'q"
 
     text = (
-        f"🎬 <b>{esc(movie.display_title)}</b>\n\n"
+        f"🎬 <b>{safe_html(movie.display_title)}</b>\n\n"
         f"📝 Kod: <code>{movie.code}</code>\n"
         f"🎭 Janr: {category_name}\n"
         f"📅 Yil: {year_text}\n"
@@ -344,7 +344,7 @@ async def admin_movie_edit_menu(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"admin:movie_view:{code}")],
     ])
     await callback.message.edit_text(
-        f"✏️ <b>{esc(movie.display_title)}</b>\n📝 Kod: <code>{movie.code}</code>\n\n"
+        f"✏️ <b>{safe_html(movie.display_title)}</b>\n📝 Kod: <code>{movie.code}</code>\n\n"
         "Qaysi maydonni tahrirlaymiz?",
         reply_markup=kb
     )
@@ -377,17 +377,17 @@ async def admin_movie_edit_field(callback: CallbackQuery, state: FSMContext):
         rows.append([InlineKeyboardButton(text="🚫 Janrsiz", callback_data="medit_cat:none")])
         rows.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")])
         await callback.message.edit_text(
-            f"🎭 <b>{esc(movie.display_title)}</b> uchun yangi janrni tanlang:",
+            f"🎭 <b>{safe_html(movie.display_title)}</b> uchun yangi janrni tanlang:",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
         )
     elif field == 'video':
         await callback.message.edit_text(
-            f"🎬 <b>{esc(movie.display_title)}</b> uchun yangi <b>video</b> faylini yuboring:",
+            f"🎬 <b>{safe_html(movie.display_title)}</b> uchun yangi <b>video</b> faylini yuboring:",
             reply_markup=cancel_inline_kb()
         )
     elif field == 'poster':
         await callback.message.edit_text(
-            f"🖼 <b>{esc(movie.display_title)}</b> uchun yangi <b>poster rasm</b>ni yuboring:",
+            f"🖼 <b>{safe_html(movie.display_title)}</b> uchun yangi <b>poster rasm</b>ni yuboring:",
             reply_markup=cancel_inline_kb()
         )
     else:
@@ -398,7 +398,7 @@ async def admin_movie_edit_field(callback: CallbackQuery, state: FSMContext):
             'code': "🔢 Yangi kodni kiriting (faqat raqam):",
         }
         await callback.message.edit_text(
-            f"<b>{esc(movie.display_title)}</b>\n\n{prompts[field]}",
+            f"<b>{safe_html(movie.display_title)}</b>\n\n{prompts[field]}",
             reply_markup=cancel_inline_kb()
         )
     await callback.answer()
@@ -951,9 +951,11 @@ async def add_movie_language(callback: CallbackQuery, state: FSMContext):
 @router.message(AddMovieState.description, F.text)
 async def add_movie_description(message: Message, state: FSMContext):
     """Tavsif kiritish"""
-    description = message.text.strip()
+    # html_text_of - qalin/qiya formatlash saqlanadi (safe_html render qiladi).
+    # Uzunlik tekshiruvi sof matnda - HTML teglari limitni yeb qo'ymasligi uchun.
+    description = html_text_of(message).strip()
 
-    if len(description) > 500:
+    if len(message.text.strip()) > 500:
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data="description:skip")],
@@ -1143,7 +1145,7 @@ async def notify_movie_confirm(callback: CallbackQuery):
     ])
     await callback.message.edit_text(
         f"🔔 <b>Yangi kino bildirishnomasi</b>\n\n"
-        f"🎬 {esc(movie.display_title)} (kod: <code>{movie.code}</code>)\n\n"
+        f"🎬 {safe_html(movie.display_title)} (kod: <code>{movie.code}</code>)\n\n"
         f"Bu xabar <b>{total}</b> ta faol foydalanuvchiga yuboriladi. Tasdiqlaysizmi?",
         reply_markup=kb
     )
@@ -1167,7 +1169,7 @@ async def notify_movie_send(callback: CallbackQuery, bot: Bot = None):
     premium_note = "💎 <i>Premium kino</i>\n" if movie.is_premium else ""
     text = (
         f"🆕 <b>Yangi kino qo'shildi!</b>\n\n"
-        f"🎬 <b>{esc(movie.display_title)}</b>\n"
+        f"🎬 <b>{safe_html(movie.display_title)}</b>\n"
         f"{premium_note}"
         f"📝 Kod: <code>{esc(movie.code)}</code>\n\n"
         f"Ko'rish uchun kodni yuboring 👆"
@@ -1674,21 +1676,23 @@ async def broadcast_content(message: Message, state: FSMContext):
     file_id = ""
     text = ""
 
+    # html_text_of - Telegram formatlashini (qalin/qiya/havola) SAQLAYDI.
+    # message.text/caption sof matn qaytarib, formatlashni yo'qotardi.
     if message.text:
         content_type = "text"
-        text = message.text
+        text = html_text_of(message)
     elif message.photo:
         content_type = "photo"
         file_id = message.photo[-1].file_id
-        text = message.caption or ""
+        text = html_text_of(message) if message.caption else ""
     elif message.video:
         content_type = "video"
         file_id = message.video.file_id
-        text = message.caption or ""
+        text = html_text_of(message) if message.caption else ""
     elif message.document:
         content_type = "document"
         file_id = message.document.file_id
-        text = message.caption or ""
+        text = html_text_of(message) if message.caption else ""
 
     await state.update_data(
         content_type=content_type,
@@ -4015,7 +4019,8 @@ async def edit_message_content(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    new_content = message.text
+    # html_text_of - admin qalin/qiya qilib yozgan shablon shundayligicha saqlanadi
+    new_content = html_text_of(message) if message.text else None
     if not new_content:
         # Rasm/stiker/ovoz kabi matnsiz xabar -> template.content=None IntegrityError
         # berardi yoki shablonni "None" ga aylantirardi. State'ni saqlab, qayta so'raymiz.

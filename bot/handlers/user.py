@@ -21,7 +21,7 @@ from bot.keyboards import (
     flash_sale_tariffs_kb, filter_movies_kb, apply_discount,
     profile_kb, history_movies_kb, name_search_results_kb
 )
-from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, remove_channel_membership, get_message_text, compute_missing_channels, esc
+from bot.utils import get_or_create_user, format_number, format_date, update_user_joined_channel, record_channel_subscriptions, get_confirmed_channel_ids, get_join_requested_ids, get_channel_by_tg_id, record_join_request, remove_channel_membership, get_message_text, compute_missing_channels, esc, safe_html, to_plain
 from bot.states import MovieRequestState
 from apps.payments.models import PendingPaymentSession
 from datetime import timedelta
@@ -249,8 +249,12 @@ async def _show_current_stage(callback: CallbackQuery, not_subscribed: list):
 async def on_chat_join_request(request: ChatJoinRequest):
     """
     Yopiq (private) majburiy kanalga qo'shilish so'rovi kelganда - uni obuna deb
-    hisoblaymiz (so'rovning o'zi kifoya, admin tasdig'ini kutmaymiz). Bot kanalga
-    admin bo'lsa shu update keladi.
+    hisoblaymiz (so'rovning o'zi kifoya, admin tasdig'ini kutmaymiz).
+
+    MUHIM: bu update faqat bot kanalda ADMIN bo'lsa VA "can_invite_users" huquqiga
+    ega bo'lsa keladi. Aks holda Telegram uni yubormaydi va user bloklanib qoladi.
+
+    User bazada bo'lmasligi mumkin (/start bosmagan) - record_join_request uni yaratadi.
     """
     from bot.middlewares.subscription import clear_subscription_cache
 
@@ -258,7 +262,11 @@ async def on_chat_join_request(request: ChatJoinRequest):
     if not channel:
         return  # bizning majburiy kanalimiz emas
 
-    await record_join_request(request.from_user.id, channel.id)
+    await record_join_request(
+        request.from_user.id, channel.id,
+        username=request.from_user.username,
+        full_name=request.from_user.full_name,
+    )
     clear_subscription_cache(request.from_user.id)
 
 
@@ -434,7 +442,7 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
             pct = settings.discount_percent
             seconds_left = settings.discount_duration
             await message.answer(
-                f"💎 <b>{esc(movie.display_title)}</b> — bu Premium kino!\n\n"
+                f"💎 <b>{safe_html(movie.display_title)}</b> — bu Premium kino!\n\n"
                 f"🔥 <b>Faqat siz uchun {pct}% CHEGIRMA!</b>\n"
                 f"⏰ <b>Shoshiling! Atigi {seconds_left} soniya amal qiladi.</b>\n\n"
                 "📦 Chegirmali tarifni tanlang:",
@@ -443,9 +451,7 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
         else:
             is_admin = await is_user_admin(user_id)
             await message.answer(
-                f"💎 <b>{esc(movie.display_title)}</b>\n\n"
-                "Bu kino faqat Premium foydalanuvchilar uchun.\n\n"
-                "Premium olish uchun 💎 Premium tugmasini bosing.",
+                await get_message_text('premium_required', title=safe_html(movie.display_title)),
                 reply_markup=main_menu_inline_kb(is_admin=is_admin)
             )
         return
@@ -454,12 +460,12 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
     try:
         bot_link = await get_bot_link(bot)
 
-        desc = f"\n\n📖 {esc(movie.description)}" if movie.description else ""
+        desc = f"\n\n📖 {safe_html(movie.description)}" if movie.description else ""
         year_text = f"📅 Yil: {movie.year}\n" if movie.year else ""
         country_text = f"🌍 Davlat: {movie.get_country_display()}\n" if hasattr(movie, 'get_country_display') else ""
 
         caption = (
-            f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
+            f"🎬 <b>{safe_html(movie.display_title)}</b>{desc}\n\n"
             f"📝 Kod: <code>{esc(movie.code)}</code>\n"
             f"{year_text}"
             f"{country_text}"
@@ -536,7 +542,10 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
 
     # Premium tekshirish
     if movie.is_premium and not (db_user and db_user.is_premium_active):
-        await callback.answer("💎 Bu Premium kino! Premium olish uchun menudagi tugmani bosing.", show_alert=True)
+        await callback.answer(
+            to_plain(await get_message_text('premium_required', title=movie.display_title)),
+            show_alert=True
+        )
         return
 
     # Ko'rishlar sonini oshirish + ko'rish tarixi
@@ -550,7 +559,7 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
 
     # Kino yuborish
     try:
-        cap = f"🎬 <b>{esc(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>"
+        cap = f"🎬 <b>{safe_html(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>"
         kb = movie_action_kb(movie.code, is_saved, movie.likes, is_liked)
         uid = callback.from_user.id
         if movie.thumbnail_file_id and movie.file_id:
@@ -715,7 +724,7 @@ async def top_movies_callback(callback: CallbackQuery):
 
     text = "🔥 <b>Top 10 kinolar:</b>\n\n"
     for i, movie in enumerate(movies, 1):
-        text += f"{i}. 🎬 <b>{esc(movie.display_title)}</b>\n"
+        text += f"{i}. 🎬 <b>{safe_html(movie.display_title)}</b>\n"
         text += f"    📝 Kod: <code>{esc(movie.code)}</code> • 👍 {format_number(movie.likes)} • 👁 {format_number(movie.views)}\n\n"
 
     text += "📥 Kino olish uchun kodini yuboring."
@@ -735,7 +744,7 @@ async def top_movies_handler(message: Message):
 
     text = "🔥 <b>Top 10 kinolar:</b>\n\n"
     for i, movie in enumerate(movies, 1):
-        text += f"{i}. 🎬 <b>{esc(movie.display_title)}</b>\n"
+        text += f"{i}. 🎬 <b>{safe_html(movie.display_title)}</b>\n"
         text += f"    📝 Kod: <code>{esc(movie.code)}</code> • 👍 {format_number(movie.likes)} • 👁 {format_number(movie.views)}\n\n"
 
     text += "📥 Kino olish uchun kodini yuboring."
@@ -817,7 +826,7 @@ async def new_movies_callback(callback: CallbackQuery):
     text = "🆕 <b>Yangi kinolar:</b>\n\n"
     for movie in movies:
         premium = "💎 " if movie.is_premium else ""
-        text += f"{premium}🎬 <b>{esc(movie.display_title)}</b>\n"
+        text += f"{premium}🎬 <b>{safe_html(movie.display_title)}</b>\n"
         text += f"    📝 Kod: <code>{esc(movie.code)}</code>\n\n"
 
     text += "📥 Kino olish uchun kodini yuboring."
@@ -838,7 +847,7 @@ async def last_movies_handler(message: Message):
     text = "🆕 <b>Yangi kinolar:</b>\n\n"
     for movie in movies:
         premium = "💎 " if movie.is_premium else ""
-        text += f"{premium}🎬 <b>{esc(movie.display_title)}</b>\n"
+        text += f"{premium}🎬 <b>{safe_html(movie.display_title)}</b>\n"
         text += f"    📝 Kod: <code>{esc(movie.code)}</code>\n\n"
 
     text += "📥 Kino olish uchun kodini yuboring."
@@ -871,8 +880,7 @@ async def random_movie_handler(message: Message, db_user: User = None, bot: Bot 
     if movie.is_premium and not (db_user and db_user.is_premium_active):
         is_admin = await is_user_admin(user_id)
         await message.answer(
-            f"💎 <b>{esc(movie.display_title)}</b>\n\n"
-            "Premium kino tushdi! Premium olish uchun 💎 Premium tugmasini bosing.",
+            await get_message_text('premium_required', title=safe_html(movie.display_title)),
             reply_markup=main_menu_inline_kb(is_admin=is_admin)
         )
         return
@@ -880,14 +888,14 @@ async def random_movie_handler(message: Message, db_user: User = None, bot: Bot 
     try:
         bot_link = await get_bot_link(bot)
 
-        desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
+        desc = f"\n📖 {safe_html(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
 
         await send_movie_or_notice(
             message, movie,
             (
                 f"🎲 <b>Random kino:</b>\n\n"
-                f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
+                f"🎬 <b>{safe_html(movie.display_title)}</b>{desc}\n\n"
                 f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
@@ -1079,7 +1087,10 @@ async def movie_callback(callback: CallbackQuery, db_user: User = None, bot: Bot
         return
 
     if movie.is_premium and not (db_user and db_user.is_premium_active):
-        await callback.answer("💎 Bu Premium kino!", show_alert=True)
+        await callback.answer(
+            to_plain(await get_message_text('premium_required', title=movie.display_title)),
+            show_alert=True
+        )
         return
 
     await callback.answer()
@@ -1087,13 +1098,13 @@ async def movie_callback(callback: CallbackQuery, db_user: User = None, bot: Bot
     try:
         bot_link = await get_bot_link(bot)
 
-        desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
+        desc = f"\n📖 {safe_html(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
 
         await send_movie_or_notice(
             callback.message, movie,
             (
-                f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
+                f"🎬 <b>{safe_html(movie.display_title)}</b>{desc}\n\n"
                 f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n"
                 f"👁 {format_number(movie.views)}\n\n"
@@ -1633,7 +1644,10 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
 
     # Premium check
     if movie.is_premium and not (db_user and db_user.is_premium_active):
-        await callback.answer("💎 Bu Premium kino!", show_alert=True)
+        await callback.answer(
+            to_plain(await get_message_text('premium_required', title=movie.display_title)),
+            show_alert=True
+        )
         return
 
     await callback.answer()
@@ -1642,7 +1656,7 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
         bot_info = await bot.me()
         bot_link = f"https://t.me/{bot_info.username}"
 
-        desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
+        desc = f"\n📖 {safe_html(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
 
         is_liked = await check_movie_liked(db_user.user_id, movie.code) if db_user else False
@@ -1650,7 +1664,7 @@ async def saved_movie_callback(callback: CallbackQuery, db_user: User = None, bo
             callback.message, movie,
             (
                 f"❤️ <b>Saqlangan kino:</b>\n\n"
-                f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
+                f"🎬 <b>{safe_html(movie.display_title)}</b>{desc}\n\n"
                 f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n"
                 f"👍 {format_number(movie.likes)} • 👁 {format_number(movie.views)}\n\n"
@@ -1683,7 +1697,10 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
         return
 
     if movie.is_premium and not (db_user and db_user.is_premium_active):
-        await callback.answer("💎 Premium kino tushdi! Premium oling.", show_alert=True)
+        await callback.answer(
+            to_plain(await get_message_text('premium_required', title=movie.display_title)),
+            show_alert=True
+        )
         return
 
     await callback.answer()
@@ -1691,7 +1708,7 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
     try:
         bot_link = await get_bot_link(bot)
 
-        desc = f"\n📖 {esc(movie.description)}" if movie.description else ""
+        desc = f"\n📖 {safe_html(movie.description)}" if movie.description else ""
         year_text = f" • 📅 {movie.year}" if movie.year else ""
         is_saved = await check_movie_saved(user_id, movie.code) if db_user else False
         is_liked = await check_movie_liked(user_id, movie.code) if db_user else False
@@ -1700,7 +1717,7 @@ async def random_movie_callback(callback: CallbackQuery, db_user: User = None, b
             callback.message, movie,
             (
                 f"🎲 <b>Random kino:</b>\n\n"
-                f"🎬 <b>{esc(movie.display_title)}</b>{desc}\n\n"
+                f"🎬 <b>{safe_html(movie.display_title)}</b>{desc}\n\n"
                 f"📝 Kod: <code>{esc(movie.code)}</code>\n"
                 f"📺 {movie.get_quality_display()} • 🌐 {movie.get_language_display()}{year_text}\n\n"
                 f"🤖 <b>Bot:</b> {bot_link}"
