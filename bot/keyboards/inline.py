@@ -98,16 +98,56 @@ def categories_kb(categories: list) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def admin_categories_kb(categories: list) -> InlineKeyboardMarkup:
-    """Admin uchun kategoriyalar"""
+def admin_categories_kb(categories: list, selected: list = None) -> InlineKeyboardMarkup:
+    """Admin uchun janr tanlash - KO'P TANLOVLI (bitta kinoda 2-3 janr bo'lishi mumkin).
+
+    Tanlangan janr ✅ bilan belgilanadi. Tugma bosilganda tanlov teskarisiga o'zgaradi
+    (toggle) va ro'yxat qayta chiziladi - qadam TUGAMAYDI. Tugatish uchun "✅ Tayyor".
+
+    Args:
+        selected: tanlangan Category id'lari ro'yxati.
+    """
+    selected = selected or []
     builder = InlineKeyboardBuilder()
 
     for category in categories:
         emoji = category.emoji if category.emoji else "📁"
-        builder.button(text=f"{emoji} {category.name}", callback_data=f"admin_category:{category.id}")
+        mark = "✅ " if category.id in selected else ""
+        builder.button(
+            text=f"{mark}{emoji} {category.name}",
+            callback_data=f"admin_category:{category.id}"
+        )
 
     builder.adjust(2)
+
+    if selected:
+        builder.row(InlineKeyboardButton(
+            text=f"✅ Tayyor ({len(selected)} ta janr)", callback_data="admin_category:done"
+        ))
     builder.row(InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data="admin_category:skip"))
+    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel"))
+
+    return builder.as_markup()
+
+
+def medit_categories_kb(categories: list, selected: list = None) -> InlineKeyboardMarkup:
+    """Kino TAHRIRLASHда janr tanlash - ko'p tanlovli (toggle + Saqlash)."""
+    selected = selected or []
+    builder = InlineKeyboardBuilder()
+
+    for category in categories:
+        emoji = category.emoji if category.emoji else "📁"
+        mark = "✅ " if category.id in selected else ""
+        builder.button(
+            text=f"{mark}{emoji} {category.name}",
+            callback_data=f"medit_cat:{category.id}"
+        )
+
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(
+        text=f"💾 Saqlash ({len(selected)} ta janr)", callback_data="medit_cat:save"
+    ))
+    builder.row(InlineKeyboardButton(text="🚫 Janrsiz qilish", callback_data="medit_cat:none"))
     builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel"))
 
     return builder.as_markup()

@@ -14,7 +14,7 @@ from apps.core.models import Broadcast
 from bot.filters import IsAdmin, CanAddMovies, CanBroadcast, CanManageUsers, CanManagePayments, IsSuperAdmin
 from bot.states import AddMovieState, EditMovieState, BroadcastState, AddChannelState, EditSettingsState, EditMessageState, UserSearchState, AddCategoryState, EditCategoryState, AddTariffState, EditTariffState
 from bot.keyboards import (
-    admin_categories_kb, movie_quality_kb, movie_language_kb, movie_country_kb,
+    admin_categories_kb, medit_categories_kb, movie_quality_kb, movie_language_kb, movie_country_kb,
     broadcast_target_kb, broadcast_ad_kb, confirm_broadcast_kb,
     cancel_inline_kb, admin_main_kb, skip_inline_kb,
     main_menu_inline_kb, back_kb, admin_messages_kb
@@ -223,7 +223,7 @@ async def admin_movie_view(callback: CallbackQuery):
         await callback.answer("❌ Kino topilmadi", show_alert=True)
         return
 
-    category_name = movie.category.name if movie.category else "Yo'q"
+    category_name = await get_movie_genres_display(movie.id) or "Yo'q"
     year_text = str(movie.year) if movie.year else "Yo'q"
     country_text = movie.get_country_display() if hasattr(movie, 'get_country_display') else "Yo'q"
 
@@ -372,13 +372,14 @@ async def admin_movie_edit_field(callback: CallbackQuery, state: FSMContext):
     await state.set_state(EditMovieState.value)
 
     if field == 'category':
+        # Ko'p janr: hozirgi janrlar oldindan belgilangan holda ochiladi
         categories = await get_categories()
-        rows = [[InlineKeyboardButton(text=(c.name), callback_data=f"medit_cat:{c.id}")] for c in categories]
-        rows.append([InlineKeyboardButton(text="🚫 Janrsiz", callback_data="medit_cat:none")])
-        rows.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")])
+        current = await get_movie_category_ids(movie.id)
+        await state.update_data(category_ids=current)
         await callback.message.edit_text(
-            f"🎭 <b>{safe_html(movie.display_title)}</b> uchun yangi janrni tanlang:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+            f"🎭 <b>{safe_html(movie.display_title)}</b> uchun janrlarni tanlang:\n\n"
+            "<i>Bir nechta janr tanlash mumkin. Tugatgach «Saqlash» ni bosing.</i>",
+            reply_markup=medit_categories_kb(categories, selected=current)
         )
     elif field == 'video':
         await callback.message.edit_text(
@@ -413,18 +414,43 @@ def _medit_result_kb(code: str) -> InlineKeyboardMarkup:
 
 @router.callback_query(EditMovieState.value, F.data.startswith("medit_cat:"), IsAdmin())
 async def admin_movie_edit_category(callback: CallbackQuery, state: FSMContext):
-    """Yangi janrni saqlash."""
+    """Janrlarni tahrirlash - KO'P TANLOVLI (toggle, keyin Saqlash)."""
     data = await state.get_data()
     code = data.get('edit_code')
     cat_raw = callback.data.split(":")[1]
-    category_id = None if cat_raw == "none" else int(cat_raw)
+    selected = list(data.get('category_ids') or [])
 
-    movie, err = await edit_movie_field(code, 'category_id', category_id)
+    # --- Janr tugmasi: toggle, shu qadamda qolamiz ---
+    if cat_raw not in ("save", "none"):
+        cat_id = int(cat_raw)
+        if cat_id in selected:
+            selected.remove(cat_id)
+        else:
+            selected.append(cat_id)
+        await state.update_data(category_ids=selected)
+
+        categories = await get_categories()
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=medit_categories_kb(categories, selected=selected)
+            )
+        except TelegramBadRequest:
+            pass
+        await callback.answer()
+        return
+
+    # --- Saqlash ---
+    if cat_raw == "none":
+        selected = []
+
+    movie, err = await set_movie_categories(code, selected)
     await state.clear()
     if err or not movie:
         await callback.answer("❌ Kino topilmadi", show_alert=True)
         return
-    cat_name = movie.category.name if movie.category else "Janrsiz"
+
+    names = await get_category_names(selected)
+    cat_name = " | ".join(names) if names else "Janrsiz"
     await callback.message.edit_text(
         f"✅ Janr yangilandi: <b>{esc(cat_name)}</b>",
         reply_markup=_medit_result_kb(movie.code)
@@ -692,7 +718,7 @@ async def add_movie_video(message: Message, state: FSMContext):
             reply_markup=admin_categories_kb(categories)
         )
     else:
-        await state.update_data(category_id=None)
+        await state.update_data(category_ids=[])
         await state.set_state(AddMovieState.quality)
         await message.answer(
             f"✅ Kod: <code>{data.get('code')}</code>\n"
@@ -722,7 +748,7 @@ async def add_movie_video_skip(callback: CallbackQuery, state: FSMContext):
             reply_markup=admin_categories_kb(categories)
         )
     else:
-        await state.update_data(category_id=None)
+        await state.update_data(category_ids=[])
         await state.set_state(AddMovieState.quality)
         await callback.message.edit_text(
             f"✅ Kod: <code>{data.get('code')}</code>\n"
@@ -753,7 +779,7 @@ async def add_movie_photo(message: Message, state: FSMContext):
             reply_markup=admin_categories_kb(categories)
         )
     else:
-        await state.update_data(category_id=None)
+        await state.update_data(category_ids=[])
         await state.set_state(AddMovieState.quality)
         await message.answer(
             f"✅ Kod: <code>{data.get('code')}</code>\n"
@@ -782,19 +808,43 @@ async def add_movie_video_invalid(message: Message, state: FSMContext):
 
 @router.callback_query(AddMovieState.category, F.data.startswith("admin_category:"))
 async def add_movie_category(callback: CallbackQuery, state: FSMContext):
-    """Janr tanlash"""
+    """Janr tanlash - KO'P TANLOVLI.
+
+    Janr tugmasi bosilsa tanlov toggle bo'ladi va ro'yxat qayta chiziladi (qadam
+    tugamaydi). Keyingi qadamga faqat "✅ Tayyor" yoki "⏭ O'tkazib yuborish" o'tkazadi.
+    """
     cat_data = callback.data.split(":")[1]
     data = await state.get_data()
+    selected = list(data.get('category_ids') or [])
 
+    # --- Janr tugmasi: toggle qilib, shu qadamda qolamiz ---
+    if cat_data not in ("skip", "done"):
+        cat_id = int(cat_data)
+        if cat_id in selected:
+            selected.remove(cat_id)
+        else:
+            selected.append(cat_id)
+        await state.update_data(category_ids=selected)
+
+        categories = await get_categories()
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=admin_categories_kb(categories, selected=selected)
+            )
+        except TelegramBadRequest:
+            pass  # xabar o'zgarmagan
+        await callback.answer()
+        return
+
+    # --- Tugatish ---
     if cat_data == "skip":
-        category_id = None
+        selected = []
         cat_text = "O'tkazildi"
-    else:
-        category_id = int(cat_data)
-        category = await get_category_by_id(category_id)
-        cat_text = category.name if category else "Tanlandi"
+    else:  # done
+        names = await get_category_names(selected)
+        cat_text = " | ".join(names) if names else "O'tkazildi"
 
-    await state.update_data(category_id=category_id)
+    await state.update_data(category_ids=selected)
     await state.set_state(AddMovieState.year)
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -1021,11 +1071,8 @@ async def add_movie_is_premium(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AddMovieState.confirm)
 
     # Ma'lumotlarni tayyorlash
-    category_name = "Yo'q"
-    if data.get('category_id'):
-        category = await get_category_by_id(data['category_id'])
-        if category:
-            category_name = category.name
+    names = await get_category_names(data.get('category_ids') or [])
+    category_name = " | ".join(names) if names else "Yo'q"
 
     year_text = str(data.get('year')) if data.get('year') else "Yo'q"
 
@@ -1086,7 +1133,7 @@ async def add_movie_confirm(callback: CallbackQuery, state: FSMContext, db_user:
         title=data['title'],
         file_id=data.get('file_id', ''),
         thumbnail_file_id=data.get('thumbnail_file_id', ''),
-        category_id=data.get('category_id'),
+        category_ids=data.get('category_ids') or [],
         year=data.get('year'),
         country=data.get('country', 'usa'),
         quality=data.get('quality', '720p'),
@@ -1096,12 +1143,9 @@ async def add_movie_confirm(callback: CallbackQuery, state: FSMContext, db_user:
         added_by_id=db_user.user_id if db_user else None
     )
 
-    # Kategoriya nomini olish
-    category_name = "Yo'q"
-    if data.get('category_id'):
-        category = await get_category_by_id(data['category_id'])
-        if category:
-            category_name = category.name
+    # Janr nomlarini olish
+    names = await get_category_names(data.get('category_ids') or [])
+    category_name = " | ".join(names) if names else "Yo'q"
 
     premium_text = "💎 Premium" if movie.is_premium else "🆓 Oddiy"
 
@@ -3561,7 +3605,63 @@ def get_categories():
 
 
 @sync_to_async
-def create_movie(code, title, file_id, category_id, year, country, quality, language, description, is_premium, added_by_id, thumbnail_file_id=''):
+def get_category_names(category_ids: list) -> list:
+    """Tanlangan janr nomlari (tanlangan TARTIBDA)."""
+    if not category_ids:
+        return []
+    by_id = {c.id: c.name for c in Category.objects.filter(id__in=category_ids)}
+    return [by_id[cid] for cid in category_ids if cid in by_id]
+
+
+@sync_to_async
+def get_movie_category_ids(movie_id: int) -> list:
+    """Kinoning hozirgi janr id'lari (M2M bo'sh bo'lsa eski FK'dan)."""
+    try:
+        movie = Movie.objects.prefetch_related('categories').get(id=movie_id)
+    except Movie.DoesNotExist:
+        return []
+    ids = [c.id for c in movie.categories.all()]
+    if not ids and movie.category_id:
+        ids = [movie.category_id]
+    return ids
+
+
+@sync_to_async
+def get_movie_genres_display(movie_id: int) -> str:
+    """Kino janrlari bitta satrda: "Romantik | Jangari"."""
+    try:
+        movie = Movie.objects.select_related('category').prefetch_related('categories').get(id=movie_id)
+    except Movie.DoesNotExist:
+        return ""
+    return movie.genres_display
+
+
+@sync_to_async
+def set_movie_categories(code: str, category_ids: list):
+    """Kino janrlarini o'rnatish (M2M) + eski FK'ni birinchi janrga sinxronlash.
+
+    FK ham yangilanadi, chunki web panel/API hozircha shuni o'qiydi.
+    Returns: (movie, error)
+    """
+    try:
+        movie = Movie.objects.get(code=code)
+    except Movie.DoesNotExist:
+        return None, 'not_found'
+
+    category_ids = list(category_ids or [])
+    movie.categories.set(category_ids)
+    movie.category_id = category_ids[0] if category_ids else None
+    movie.save(update_fields=['category'])
+    return movie, None
+
+
+@sync_to_async
+def create_movie(code, title, file_id, category_ids, year, country, quality, language, description, is_premium, added_by_id, thumbnail_file_id=''):
+    """Kino yaratish.
+
+    category_ids - janrlar ro'yxati (M2M). Birinchisi eski `category` FK'ga ham
+    yoziladi: web panel/API hozircha FK o'qiydi, shuning uchun ikkalasiga yozamiz.
+    """
     added_by = None
     if added_by_id:
         try:
@@ -3569,12 +3669,13 @@ def create_movie(code, title, file_id, category_id, year, country, quality, lang
         except User.DoesNotExist:
             pass
 
-    return Movie.objects.create(
+    category_ids = list(category_ids or [])
+    movie = Movie.objects.create(
         code=code,
         title=title,
         file_id=file_id,
         thumbnail_file_id=thumbnail_file_id,
-        category_id=category_id,
+        category_id=category_ids[0] if category_ids else None,
         year=year,
         country=country,
         quality=quality,
@@ -3583,6 +3684,9 @@ def create_movie(code, title, file_id, category_id, year, country, quality, lang
         is_premium=is_premium,
         added_by=added_by
     )
+    if category_ids:
+        movie.categories.set(category_ids)
+    return movie
 
 
 @sync_to_async

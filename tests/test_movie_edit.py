@@ -111,7 +111,7 @@ class TestCreateMoviePoster:
         from bot.handlers.admin import create_movie
         movie = create_movie.func(
             code='70020', title='Poster kino', file_id='',
-            thumbnail_file_id='POSTER_ABC', category_id=None,
+            thumbnail_file_id='POSTER_ABC', category_ids=[],
             year=None, country='usa', quality='720p', language='uzbek',
             description='', is_premium=False, added_by_id=None,
         )
@@ -124,7 +124,7 @@ class TestCreateMoviePoster:
         from bot.handlers.admin import create_movie
         movie = create_movie.func(
             code='70021', title='Video kino', file_id='VIDEO_XYZ',
-            category_id=None, year=None, country='usa', quality='720p',
+            category_ids=[], year=None, country='usa', quality='720p',
             language='uzbek', description='', is_premium=False, added_by_id=None,
         )
         # thumbnail_file_id default bo'sh (ixtiyoriy argument)

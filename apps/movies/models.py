@@ -61,14 +61,29 @@ class Movie(models.Model):
     file_id = models.CharField(max_length=255, blank=True, default='', verbose_name='Telegram File ID')
     thumbnail_file_id = models.CharField(max_length=255, blank=True, default='', verbose_name='Thumbnail File ID')
 
-    # Kategoriya
+    # Kategoriya (janr)
+    #
+    # `categories` (M2M) - ASOSIY maydon: bitta kinoda 2-3 janr bo'lishi mumkin
+    # (masalan romantik + melodrama + jangari).
+    #
+    # `category` (FK) - ESKI maydon, ATAYLAB saqlanmoqda. Web panel, API va Django
+    # admin hozircha shuni o'qiydi; bot yozganda ikkalasiga ham yozadi (birinchi
+    # tanlangan janr FK'ga). Shu tufayli migratsiya bosqichma-bosqich va xavfsiz -
+    # eski kodga qaytish (rollback) ham ishlaydi. Web panel M2M'ga o'tgach o'chiriladi.
     category = models.ForeignKey(
         Category,
         on_delete=models.SET_NULL,
         blank=True,
         null=True,
         related_name='movies',
-        verbose_name='Kategoriya'
+        verbose_name='Kategoriya (asosiy)'
+    )
+
+    categories = models.ManyToManyField(
+        Category,
+        blank=True,
+        related_name='movies_m2m',
+        verbose_name='Janrlar'
     )
 
     # Ma'lumotlar
@@ -112,6 +127,23 @@ class Movie(models.Model):
     def display_title(self):
         """Ko'rsatiladigan nom"""
         return self.title_uz if self.title_uz else self.title
+
+    @property
+    def genre_list(self):
+        """Kino janrlari ro'yxati (nomlar).
+
+        M2M bo'sh bo'lsa eski FK'ga qaytadi - migratsiyadan oldin qo'shilgan yoki
+        eski kod yozgan kinolar ham janrsiz ko'rinmasligi uchun.
+        """
+        names = [c.name for c in self.categories.all()]
+        if not names and self.category_id:
+            names = [self.category.name]
+        return names
+
+    @property
+    def genres_display(self):
+        """Janrlar bitta satrda: "Romantik | Melodrama | Jangari" (yo'q bo'lsa '')."""
+        return ' | '.join(self.genre_list)
 
     def increment_views(self):
         """Ko'rishlar sonini oshirish"""

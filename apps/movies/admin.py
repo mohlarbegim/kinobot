@@ -18,15 +18,26 @@ class CategoryAdmin(admin.ModelAdmin):
 
 @admin.register(Movie)
 class MovieAdmin(admin.ModelAdmin):
-    list_display = ['code', 'title', 'category', 'country', 'quality', 'views', 'premium_badge', 'is_active']
-    list_filter = ['category', 'country', 'quality', 'language', 'is_premium', 'is_active']
+    # DIQQAT: M2M maydonni (categories) list_display'ga QO'SHIB BO'LMAYDI -
+    # Django admin.E109 bilan ishga tushmay qoladi. Shuning uchun genres_list metodi.
+    list_display = ['code', 'title', 'genres_list', 'country', 'quality', 'views', 'premium_badge', 'is_active']
+    list_filter = ['categories', 'country', 'quality', 'language', 'is_premium', 'is_active']
     search_fields = ['code', 'title', 'title_uz']
     readonly_fields = ['views', 'created_at']
     ordering = ['-created_at']
+    filter_horizontal = ['categories']
+
+    def get_queryset(self, request):
+        # N+1 oldini olish: har kino uchun alohida janr so'rovi bo'lmasin
+        return super().get_queryset(request).prefetch_related('categories')
+
+    @admin.display(description='Janrlar')
+    def genres_list(self, obj):
+        return obj.genres_display or '—'
 
     fieldsets = (
         ('Asosiy', {
-            'fields': ('code', 'title', 'title_uz', 'category')
+            'fields': ('code', 'title', 'title_uz', 'categories', 'category')
         }),
         ('Telegram', {
             'fields': ('file_id', 'thumbnail_file_id')

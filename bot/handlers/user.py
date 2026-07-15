@@ -101,28 +101,84 @@ async def send_movie_or_notice(target, movie, caption, reply_markup=None):
     protect_content=True: forward/yuklab tarqatishдан himoya (video ham, poster ham).
 
     target: Message yoki callback.message (answer_video/answer_photo/answer mavjud).
+
+    Returns:
+        Yuborilgan xabarlarning message_id ro'yxati - keyin ularni o'chirish uchun
+        (yangi kino yuborilganда eskisi o'chiriladi). Poster+video = 2 ta id.
     """
     poster = movie.thumbnail_file_id
     video = movie.file_id
+    sent = []
 
     if poster and video:
-        await target.answer_photo(
+        sent.append(await target.answer_photo(
             photo=poster, caption=caption, reply_markup=reply_markup, protect_content=True,
-        )
-        await target.answer_video(video=video, protect_content=True)
+        ))
+        sent.append(await target.answer_video(video=video, protect_content=True))
     elif video:
-        await target.answer_video(
+        sent.append(await target.answer_video(
             video=video, caption=caption, reply_markup=reply_markup, protect_content=True,
-        )
+        ))
     elif poster:
-        await target.answer_photo(
+        sent.append(await target.answer_photo(
             photo=poster, caption=caption, reply_markup=reply_markup, protect_content=True,
-        )
+        ))
     else:
-        await target.answer(
+        sent.append(await target.answer(
             f"{caption}\n\n⚠️ <i>Video hali yuklanmagan.</i>",
             reply_markup=reply_markup
-        )
+        ))
+
+    return _message_ids(sent)
+
+
+def _message_ids(messages) -> list:
+    """Yuborilgan xabarlardan message_id'larni yig'ish.
+
+    Faqat butun sonlar olinadi: testlarда target AsyncMock bo'lib, .message_id
+    Mock qaytaradi - u JSONField'ga serializatsiya qilinmasligi kerak.
+    """
+    ids = []
+    for msg in messages:
+        mid = getattr(msg, 'message_id', None)
+        if isinstance(mid, int):
+            ids.append(mid)
+    return ids
+
+
+async def cleanup_previous_movie(bot: Bot, user_id: int):
+    """Foydalanuvchiga oldin yuborilgan kinoni chatдан o'chirish.
+
+    Chatда faqat OXIRGI kino qoladi. Xatolarni yutamiz: xabar allaqachon
+    o'chirilgan bo'lishi yoki 48 soatdan eski bo'lishi mumkin (Telegram bunday
+    xabarni o'chirishga ruxsat bermaydi) - bu normal holat, jarayonni buzmaydi.
+    """
+    ids = await get_last_movie_messages(user_id)
+    if not ids:
+        return
+
+    for message_id in ids:
+        try:
+            await bot.delete_message(chat_id=user_id, message_id=message_id)
+        except TelegramBadRequest as e:
+            logger.debug(f"Eski kino xabarini o'chirib bo'lmadi (id={message_id}): {e}")
+        except Exception as e:  # noqa: BLE001 - o'chirish hech qachon kino yuborishni buzmasin
+            logger.debug(f"Eski kino xabarini o'chirishda kutilmagan xato: {e}")
+
+    await save_last_movie_messages(user_id, [])
+
+
+@sync_to_async
+def get_last_movie_messages(user_id: int) -> list:
+    """Oxirgi yuborilgan kino xabarlarining id'lari."""
+    ids = User.objects.filter(user_id=user_id).values_list('last_movie_message_ids', flat=True).first()
+    return list(ids) if ids else []
+
+
+@sync_to_async
+def save_last_movie_messages(user_id: int, message_ids: list):
+    """Oxirgi kino xabarlari id'larini saqlash."""
+    User.objects.filter(user_id=user_id).update(last_movie_message_ids=list(message_ids or []))
 
 
 async def check_user_subscription(bot: Bot, user_id: int, db_user: User = None) -> list:
@@ -463,10 +519,13 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
         desc = f"\n\n📖 {safe_html(movie.description)}" if movie.description else ""
         year_text = f"📅 Yil: {movie.year}\n" if movie.year else ""
         country_text = f"🌍 Davlat: {movie.get_country_display()}\n" if hasattr(movie, 'get_country_display') else ""
+        genres = await get_movie_genres(movie.id)
+        genre_text = f"🎭 Janr: {safe_html(genres)}\n" if genres else ""
 
         caption = (
             f"🎬 <b>{safe_html(movie.display_title)}</b>{desc}\n\n"
             f"📝 Kod: <code>{esc(movie.code)}</code>\n"
+            f"{genre_text}"
             f"{year_text}"
             f"{country_text}"
             f"📺 Sifat: {movie.get_quality_display()}\n"
@@ -480,7 +539,11 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
         is_saved = await check_movie_saved(user_id, movie.code) if db_user else False
         is_liked = await check_movie_liked(user_id, movie.code) if db_user else False
 
-        await send_movie_or_notice(
+        # Yangi kino kelyapti -> oldingisini chatдан o'chiramiz (faqat oxirgisi qoladi)
+        if db_user:
+            await cleanup_previous_movie(bot, user_id)
+
+        sent_ids = await send_movie_or_notice(
             message, movie, caption,
             movie_action_kb(movie.code, is_saved, movie.likes, is_liked)
         )
@@ -488,6 +551,7 @@ async def get_movie_by_code(message: Message, db_user: User = None, bot: Bot = N
         # Update stats + ko'rish tarixi
         await increment_movie_views(movie.id)
         if db_user:
+            await save_last_movie_messages(user_id, sent_ids)
             await increment_user_movies(db_user.user_id)
             await record_watch(db_user.user_id, movie.id)
 
@@ -559,18 +623,32 @@ async def movie_view_callback(callback: CallbackQuery, db_user: User = None, bot
 
     # Kino yuborish
     try:
-        cap = f"🎬 <b>{safe_html(movie.display_title)}</b>\n\n📝 Kod: <code>{esc(movie.code)}</code>"
+        genres = await get_movie_genres(movie.id)
+        genre_line = f"\n🎭 Janr: {safe_html(genres)}" if genres else ""
+        cap = (
+            f"🎬 <b>{safe_html(movie.display_title)}</b>\n\n"
+            f"📝 Kod: <code>{esc(movie.code)}</code>{genre_line}"
+        )
         kb = movie_action_kb(movie.code, is_saved, movie.likes, is_liked)
         uid = callback.from_user.id
+
+        # Yangi kino -> oldingisini o'chiramiz (faqat oxirgisi qoladi)
+        if db_user:
+            await cleanup_previous_movie(bot, uid)
+
+        sent = []
         if movie.thumbnail_file_id and movie.file_id:
-            await bot.send_photo(chat_id=uid, photo=movie.thumbnail_file_id, caption=cap, reply_markup=kb, protect_content=True)
-            await bot.send_video(chat_id=uid, video=movie.file_id, protect_content=True)
+            sent.append(await bot.send_photo(chat_id=uid, photo=movie.thumbnail_file_id, caption=cap, reply_markup=kb, protect_content=True))
+            sent.append(await bot.send_video(chat_id=uid, video=movie.file_id, protect_content=True))
         elif movie.file_id:
-            await bot.send_video(chat_id=uid, video=movie.file_id, caption=cap, reply_markup=kb, protect_content=True)
+            sent.append(await bot.send_video(chat_id=uid, video=movie.file_id, caption=cap, reply_markup=kb, protect_content=True))
         elif movie.thumbnail_file_id:
-            await bot.send_photo(chat_id=uid, photo=movie.thumbnail_file_id, caption=cap, reply_markup=kb, protect_content=True)
+            sent.append(await bot.send_photo(chat_id=uid, photo=movie.thumbnail_file_id, caption=cap, reply_markup=kb, protect_content=True))
         else:
-            await callback.message.answer(f"{cap}\n\n⚠️ Video fayl topilmadi.", reply_markup=kb)
+            sent.append(await callback.message.answer(f"{cap}\n\n⚠️ Video fayl topilmadi.", reply_markup=kb))
+
+        if db_user:
+            await save_last_movie_messages(uid, _message_ids(sent))
     except TelegramBadRequest as e:
         await callback.answer(f"❌ Xatolik: Video yuborib bo'lmadi.", show_alert=True)
         return
@@ -1858,9 +1936,19 @@ def get_user_db(user_id):
 @sync_to_async
 def get_movie_by_code_db(code):
     try:
-        return Movie.objects.select_related('category').get(code=code)
+        return Movie.objects.select_related('category').prefetch_related('categories').get(code=code)
     except Movie.DoesNotExist:
         return None
+
+
+@sync_to_async
+def get_movie_genres(movie_id: int) -> str:
+    """Kino janrlari bitta satrda: "Romantik | Jangari" (yo'q bo'lsa '')."""
+    try:
+        movie = Movie.objects.select_related('category').prefetch_related('categories').get(id=movie_id)
+    except Movie.DoesNotExist:
+        return ""
+    return movie.genres_display
 
 
 @sync_to_async
@@ -1940,7 +2028,17 @@ def get_movies_by_category(category_id, page=1, per_page=8):
     except Category.DoesNotExist:
         return [], 0, ""
 
-    movies = Movie.objects.filter(is_active=True, category_id=category_id).order_by('-created_at')
+    # Ko'p janr: M2M (categories) YOKI eski FK (category) bo'yicha topamiz.
+    # Eski FK ham qidiriladi - M2M'ga ko'chmagan/eski kod yozgan kinolar tushib
+    # qolmasligi uchun. .distinct() MAJBURIY: aks holda ikkala shartga mos kino
+    # ikki marta qaytib, sahifalash va total_pages buzilardi.
+    from django.db.models import Q
+    movies = (
+        Movie.objects
+        .filter(Q(categories__id=category_id) | Q(category_id=category_id), is_active=True)
+        .distinct()
+        .order_by('-created_at')
+    )
     total = movies.count()
     total_pages = (total + per_page - 1) // per_page
     start = (page - 1) * per_page

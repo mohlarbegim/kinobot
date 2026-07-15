@@ -52,6 +52,14 @@ class User(models.Model):
     # Trial tugashi bo'yicha flash push yuborilganmi (takror spamning oldini oladi)
     trial_flash_sent = models.BooleanField(default=False, verbose_name='Trial flash yuborilgan')
 
+    # Oxirgi yuborilgan kinoning xabar id'lari: [message_id, ...]
+    # Yangi kino yuborilganда eskisi o'chiriladi - chatда faqat OXIRGI kino qoladi.
+    # Ro'yxat, chunki bitta kino 2 ta xabar bo'lishi mumkin (poster + video).
+    # DB'da saqlanadi (user maydoni) - bot qayta ishga tushsa ham yo'qolmaydi.
+    last_movie_message_ids = models.JSONField(
+        blank=True, null=True, verbose_name='Oxirgi kino xabarlari'
+    )
+
     # Holat
     is_banned = models.BooleanField(default=False, verbose_name='Bloklangan')
     ban_reason = models.TextField(blank=True, null=True, verbose_name='Bloklash sababi')
